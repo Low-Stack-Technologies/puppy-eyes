@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/low-stack-technologies/puppy-eyes/internal/users"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/tcp"
 )
@@ -102,15 +104,26 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 					return
 				}
 				decodedUser, _ := base64.StdEncoding.DecodeString(userB64)
-				authenticatedUser = string(decodedUser)
+				username := string(decodedUser)
 
-				// Prompt for Password (ignored for now)
+				// Prompt for Password
 				conn.Write([]byte("334 UGFzc3dvcmQ6\r\n"))
-				_, err = tcp.ReadData(reader)
+				passB64, err := tcp.ReadData(reader)
 				if err != nil {
 					return
 				}
-				log.Printf("User %s authenticated via LOGIN", authenticatedUser)
+				decodedPass, _ := base64.StdEncoding.DecodeString(passB64)
+				password := string(decodedPass)
+
+				userID, err := users.Authenticate(context.Background(), username, password)
+				if err != nil {
+					log.Printf("Authentication failed for user %s: %v", username, err)
+					conn.Write([]byte("535 5.7.8 Authentication credentials invalid\r\n"))
+					continue
+				}
+
+				authenticatedUser = fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16])
+				log.Printf("User %s (ID: %s) authenticated via LOGIN", username, authenticatedUser)
 				conn.Write([]byte("235 2.7.0 Authentication successful\r\n"))
 
 			case "PLAIN":
@@ -126,10 +139,22 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				}
 				decoded, _ := base64.StdEncoding.DecodeString(payload)
 				creds := strings.Split(string(decoded), "\x00")
-				if len(creds) >= 2 {
-					authenticatedUser = creds[1]
+				if len(creds) < 3 {
+					conn.Write([]byte("501 5.5.4 Syntax error in parameters\r\n"))
+					continue
 				}
-				log.Printf("User %s authenticated via PLAIN", authenticatedUser)
+				username := creds[1]
+				password := creds[2]
+
+				userID, err := users.Authenticate(context.Background(), username, password)
+				if err != nil {
+					log.Printf("Authentication failed for user %s: %v", username, err)
+					conn.Write([]byte("535 5.7.8 Authentication credentials invalid\r\n"))
+					continue
+				}
+
+				authenticatedUser = fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16])
+				log.Printf("User %s (ID: %s) authenticated via PLAIN", username, authenticatedUser)
 				conn.Write([]byte("235 2.7.0 Authentication successful\r\n"))
 
 			default:
