@@ -8,20 +8,33 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 
+	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/tcp"
 )
 
-const SMTP_LISTENING_PORT = 587
+type SMTP_CONNECTION_TYPE = int
+
+const (
+	SERVER_TO_SERVER_MTA SMTP_CONNECTION_TYPE = iota
+	CLIENT_TO_SERVER_MSA
+	CLIENT_TO_SERVER_LEGACY
+)
+
+const SERVER_TO_SERVER_MTA_PORT = 25
+const CLIENT_TO_SERVER_MSA_PORT = 587
+const CLIENT_TO_SERVER_LEGACY_PORT = 465
 const SMTP_DOMAIN = "smtp.yourdomain.com"
 
-func handleSMTPConnection(conn net.Conn) {
+func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	isTLS := false
 	var authenticatedUser string
 	var envelopeFrom string
 	var envelopeTo []string
+	var spfPass bool
 
 	// 1. Greeting
 	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SMTP_DOMAIN)))
@@ -135,15 +148,34 @@ func handleSMTPConnection(conn net.Conn) {
 				continue
 			}
 
-			if authenticatedUser == "" {
+			if connectionType != SERVER_TO_SERVER_MTA && authenticatedUser == "" {
 				conn.Write([]byte("503 5.5.2 Not logged in\r\n"))
 				continue
 			}
 
 			envelopeFrom = parts[1][5:]
+
+			// Perform SPF check for incoming server-to-server mail
+			if connectionType == SERVER_TO_SERVER_MTA {
+				addr := strings.Trim(envelopeFrom, "<>")
+				idx := strings.LastIndex(addr, "@")
+				if idx == -1 {
+					conn.Write([]byte("501 5.1.7 Bad sender address syntax\r\n"))
+					continue
+				}
+				domainPart := addr[idx+1:]
+				remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+
+				var err error
+				spfPass, err = dns.VerifySPF(remoteIP, domainPart)
+				if err != nil || !spfPass {
+					log.Printf("SPF validation failed for domain %s from IP %s", domainPart, remoteIP)
+				}
+			}
 			conn.Write([]byte("250 OK\r\n"))
 
 		case "RCPT":
+			// TODO: Check if recipient actually exists if coming from external server
 			if len(parts) < 2 {
 				conn.Write([]byte("501 5.5.4 Syntax error in parameters\r\n"))
 				continue
@@ -154,9 +186,24 @@ func handleSMTPConnection(conn net.Conn) {
 				continue
 			}
 
-			if authenticatedUser == "" {
+			if connectionType != SERVER_TO_SERVER_MTA && authenticatedUser == "" {
 				conn.Write([]byte("503 5.5.2 Not logged in\r\n"))
 				continue
+			}
+
+			// Relay Protection:
+			// 1. If authenticated, allow relaying to any domain.
+			// 2. If unauthenticated (MTA), only allow our local domain.
+			if authenticatedUser == "" && connectionType == SERVER_TO_SERVER_MTA {
+				addr := strings.Trim(parts[1][3:], "<>")
+				idx := strings.LastIndex(addr, "@")
+				recipientDomain := addr[idx+1:]
+				localDomain := strings.TrimPrefix(SMTP_DOMAIN, "smtp.")
+
+				if recipientDomain != localDomain {
+					conn.Write([]byte("554 5.7.1 Relaying denied\r\n"))
+					continue
+				}
 			}
 
 			envelopeTo = append(envelopeTo, parts[1][3:])
@@ -192,11 +239,33 @@ func handleSMTPConnection(conn net.Conn) {
 				body.WriteString(line)
 			}
 
+			// Perform DMARC check before accepting the data
+			if connectionType == SERVER_TO_SERVER_MTA {
+				fromAddr := strings.Trim(envelopeFrom, "<>")
+				idx := strings.LastIndex(fromAddr, "@")
+				if idx == -1 {
+					conn.Write([]byte("550 5.7.1 Invalid sender domain\r\n"))
+					continue
+				}
+				fromDomain := fromAddr[idx+1:]
+				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfPass)
+
+				// Reject if DMARC fails and policy is 'reject' or 'quarantine'
+				if !dmarcPass && (policy == "reject" || policy == "quarantine") {
+					conn.Write([]byte(fmt.Sprintf("550 5.7.1 DMARC policy violation (%s)\r\n", policy)))
+					envelopeFrom = ""
+					envelopeTo = nil
+					spfPass = false
+					continue
+				}
+			}
+
 			log.Printf("Received email data from %s to %v:\n%s", envelopeFrom, envelopeTo, body.String())
 
 			// Reset envelope for the next transaction on the same connection
 			envelopeFrom = ""
 			envelopeTo = nil
+			spfPass = false
 			conn.Write([]byte("250 2.0.0 OK: queued\r\n"))
 
 		case "QUIT":
@@ -209,14 +278,17 @@ func handleSMTPConnection(conn net.Conn) {
 	}
 }
 
-func StartListening() {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", SMTP_LISTENING_PORT))
+func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_TYPE) {
+	// Handle the wait group
+	defer wg.Done()
+	// Listen on the specified port
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		panic(fmt.Errorf("An error occurred while attempting to start the SMTP server: %w", err))
 	}
 
 	defer listener.Close()
-	log.Printf("SMTP server listening on port %d", SMTP_LISTENING_PORT)
+	log.Printf("SMTP server listening on port %d", port)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -224,6 +296,16 @@ func StartListening() {
 			continue
 		}
 		log.Printf("SMTP server received connection from %s", conn.RemoteAddr())
-		go handleSMTPConnection(conn)
+		go handleSMTPConnection(conn, connectionType)
 	}
+}
+
+func StartListening() {
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go listenOnPort(&wg, SERVER_TO_SERVER_MTA_PORT, SERVER_TO_SERVER_MTA)
+	go listenOnPort(&wg, CLIENT_TO_SERVER_MSA_PORT, CLIENT_TO_SERVER_MSA)
+	go listenOnPort(&wg, CLIENT_TO_SERVER_LEGACY_PORT, CLIENT_TO_SERVER_LEGACY)
+	wg.Wait()
 }
