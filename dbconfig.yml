@@ -1,0 +1,5 @@
+development:
+  dialect: postgres
+  datasource: postgresql://puppy:pup@localhost:5432/pup?sslmode=disable
+  dir: db/migrations
+  table: migrations
