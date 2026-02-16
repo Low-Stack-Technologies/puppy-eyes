@@ -163,12 +163,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 			}
 
 		case "MAIL":
-			if len(parts) < 2 {
-				conn.Write([]byte("501 5.5.4 Syntax error in parameters\r\n"))
-				continue
-			}
-
-			if parts[1][:4] != "FROM" {
+			if len(parts) < 2 || len(parts[1]) < 4 || strings.ToUpper(parts[1][:4]) != "FROM" {
 				conn.Write([]byte("501 5.5.4 Syntax error in parameters\r\n"))
 				continue
 			}
@@ -258,7 +253,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				}
 
 				// Dot-unstuffing: If a line starts with a period, the first period is removed.
-				if len(strings.TrimPrefix(line, ".")) == 0 {
+				if strings.HasPrefix(line, ".") {
 					line = line[1:]
 				}
 				body.WriteString(line)
