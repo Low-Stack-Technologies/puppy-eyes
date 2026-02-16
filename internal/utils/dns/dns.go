@@ -91,3 +91,18 @@ func VerifyDMARC(domain string, spfPass bool) (bool, string, error) {
 	// DMARC passes if SPF passes (simplified: no DKIM/alignment check yet)
 	return spfPass, policy, nil
 }
+
+// LookupMX returns the hostnames of the MX records for the given domain, sorted by preference.
+func LookupMX(domain string) ([]string, error) {
+	log.Printf("[DNS] Looking up MX records for: %s", domain)
+	mxRecords, err := net.LookupMX(domain)
+	if err != nil {
+		return nil, err
+	}
+
+	hosts := make([]string, len(mxRecords))
+	for i, mx := range mxRecords {
+		hosts[i] = strings.TrimSuffix(mx.Host, ".")
+	}
+	return hosts, nil
+}

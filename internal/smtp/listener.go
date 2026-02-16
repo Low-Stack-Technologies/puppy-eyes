@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/low-stack-technologies/puppy-eyes/internal/db"
 	"github.com/low-stack-technologies/puppy-eyes/internal/users"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
@@ -34,7 +35,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	isTLS := false
-	var authenticatedUser string
+	var authenticatedUserID pgtype.UUID
 	var envelopeFrom string
 	var envelopeTo []string
 	var spfPass bool
@@ -123,8 +124,8 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 					continue
 				}
 
-				authenticatedUser = fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16])
-				log.Printf("User %s (ID: %s) authenticated via LOGIN", username, authenticatedUser)
+				authenticatedUserID = userID
+				log.Printf("User %s (ID: %s) authenticated via LOGIN", username, fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16]))
 				conn.Write([]byte("235 2.7.0 Authentication successful\r\n"))
 
 			case "PLAIN":
@@ -154,8 +155,8 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 					continue
 				}
 
-				authenticatedUser = fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16])
-				log.Printf("User %s (ID: %s) authenticated via PLAIN", username, authenticatedUser)
+				authenticatedUserID = userID
+				log.Printf("User %s (ID: %s) authenticated via PLAIN", username, fmt.Sprintf("%x-%x-%x-%x-%x", userID.Bytes[0:4], userID.Bytes[4:6], userID.Bytes[6:8], userID.Bytes[8:10], userID.Bytes[10:16]))
 				conn.Write([]byte("235 2.7.0 Authentication successful\r\n"))
 
 			default:
@@ -169,7 +170,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				continue
 			}
 
-			if connectionType != SERVER_TO_SERVER_MTA && authenticatedUser == "" {
+			if connectionType != SERVER_TO_SERVER_MTA && !authenticatedUserID.Valid {
 				conn.Write([]byte("503 5.5.2 Not logged in\r\n"))
 				continue
 			}
@@ -206,7 +207,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				continue
 			}
 
-			if connectionType != SERVER_TO_SERVER_MTA && authenticatedUser == "" {
+			if connectionType != SERVER_TO_SERVER_MTA && !authenticatedUserID.Valid {
 				conn.Write([]byte("503 5.5.2 Not logged in\r\n"))
 				continue
 			}
@@ -214,7 +215,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 			// Relay Protection & Recipient Validation:
 			// 1. If authenticated, allow relaying to any domain.
 			// 2. If unauthenticated (MTA), only allow our local domains and valid users.
-			if authenticatedUser == "" && connectionType == SERVER_TO_SERVER_MTA {
+			if !authenticatedUserID.Valid && connectionType == SERVER_TO_SERVER_MTA {
 				addr := strings.Trim(parts[1][3:], "<>")
 				idx := strings.LastIndex(addr, "@")
 				if idx == -1 {
@@ -298,6 +299,16 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				err := ReceiveEmail(context.Background(), envelopeFrom, envelopeTo, body.String(), spfPass, dmarcPass)
 				if err != nil {
 					log.Printf("Failed to process incoming email: %v", err)
+					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
+					envelopeFrom = ""
+					envelopeTo = nil
+					spfPass = false
+					continue
+				}
+			} else if authenticatedUserID.Valid {
+				err := SendEmail(context.Background(), authenticatedUserID, envelopeFrom, envelopeTo, body.String())
+				if err != nil {
+					log.Printf("Failed to send outgoing email: %v", err)
 					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
 					envelopeFrom = ""
 					envelopeTo = nil
