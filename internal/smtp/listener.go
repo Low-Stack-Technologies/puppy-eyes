@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/low-stack-technologies/puppy-eyes/internal/db"
 	"github.com/low-stack-technologies/puppy-eyes/internal/users"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/tcp"
@@ -27,7 +28,7 @@ const (
 const SERVER_TO_SERVER_MTA_PORT = 25
 const CLIENT_TO_SERVER_MSA_PORT = 587
 const CLIENT_TO_SERVER_LEGACY_PORT = 465
-const SMTP_DOMAIN = "smtp.yourdomain.com"
+const SERVER_IDENTITY = "smtp.puppy-eyes.test"
 
 func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 	defer conn.Close()
@@ -39,7 +40,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 	var spfPass bool
 
 	// 1. Greeting
-	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SMTP_DOMAIN)))
+	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SERVER_IDENTITY)))
 
 	// 2. Command loop
 	for {
@@ -57,7 +58,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 
 		switch cmd {
 		case "EHLO":
-			conn.Write([]byte(fmt.Sprintf("250-%s\r\n", SMTP_DOMAIN)))
+			conn.Write([]byte(fmt.Sprintf("250-%s\r\n", SERVER_IDENTITY)))
 			if !isTLS {
 				conn.Write([]byte("250-STARTTLS\r\n"))
 			}
@@ -195,7 +196,6 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 			conn.Write([]byte("250 OK\r\n"))
 
 		case "RCPT":
-			// TODO: Check if recipient actually exists if coming from external server
 			if len(parts) < 2 {
 				conn.Write([]byte("501 5.5.4 Syntax error in parameters\r\n"))
 				continue
@@ -211,17 +211,33 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				continue
 			}
 
-			// Relay Protection:
+			// Relay Protection & Recipient Validation:
 			// 1. If authenticated, allow relaying to any domain.
-			// 2. If unauthenticated (MTA), only allow our local domain.
+			// 2. If unauthenticated (MTA), only allow our local domains and valid users.
 			if authenticatedUser == "" && connectionType == SERVER_TO_SERVER_MTA {
 				addr := strings.Trim(parts[1][3:], "<>")
 				idx := strings.LastIndex(addr, "@")
+				if idx == -1 {
+					conn.Write([]byte("501 5.1.3 Bad recipient address syntax\r\n"))
+					continue
+				}
+				name := addr[:idx]
 				recipientDomain := addr[idx+1:]
-				localDomain := strings.TrimPrefix(SMTP_DOMAIN, "smtp.")
 
-				if recipientDomain != localDomain {
+				// Verify domain exists in our DB
+				domain, err := db.Q.GetDomainByName(context.Background(), recipientDomain)
+				if err != nil {
 					conn.Write([]byte("554 5.7.1 Relaying denied\r\n"))
+					continue
+				}
+
+				// Verify address exists in our DB
+				_, err = db.Q.GetAddressByNameAndDomain(context.Background(), db.GetAddressByNameAndDomainParams{
+					Name:   name,
+					Domain: domain.ID,
+				})
+				if err != nil {
+					conn.Write([]byte("550 5.1.1 User unknown\r\n"))
 					continue
 				}
 			}
@@ -273,6 +289,16 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				// Reject if DMARC fails and policy is 'reject' or 'quarantine'
 				if !dmarcPass && (policy == "reject" || policy == "quarantine") {
 					conn.Write([]byte(fmt.Sprintf("550 5.7.1 DMARC policy violation (%s)\r\n", policy)))
+					envelopeFrom = ""
+					envelopeTo = nil
+					spfPass = false
+					continue
+				}
+
+				err := ReceiveEmail(context.Background(), envelopeFrom, envelopeTo, body.String(), spfPass, dmarcPass)
+				if err != nil {
+					log.Printf("Failed to process incoming email: %v", err)
+					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
 					envelopeFrom = ""
 					envelopeTo = nil
 					spfPass = false

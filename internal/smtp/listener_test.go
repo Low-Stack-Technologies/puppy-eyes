@@ -25,16 +25,34 @@ func (m *mockDBTX) Exec(context.Context, string, ...interface{}) (pgconn.Command
 func (m *mockDBTX) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
 	return nil, nil
 }
-func (m *mockDBTX) QueryRow(context.Context, string, ...interface{}) pgx.Row {
-	return &mockRow{}
+func (m *mockDBTX) QueryRow(ctx context.Context, query string, args ...interface{}) pgx.Row {
+	return &mockRow{query: query, args: args}
 }
 
 // mockRow satisfies the pgx.Row interface for scanning results.
-type mockRow struct{}
+type mockRow struct {
+	query string
+	args  []interface{}
+}
 
 func (r *mockRow) Scan(dest ...interface{}) error {
-	// Always return NoRows for simulation.
-	return pgx.ErrNoRows
+	// For GetUserByCredentials, return NoRows to simulate auth failure in existing tests.
+	if strings.Contains(r.query, "GetUserByCredentials") {
+		return pgx.ErrNoRows
+	}
+
+	// For MTARelayProtection test & others: fail if domain is unknown
+	if strings.Contains(r.query, "GetDomainByName") {
+		if len(r.args) > 0 {
+			domain := r.args[0].(string)
+			// We only want to allow certain domains in our mock for success tests
+			if domain != "yourdomain.com" && domain != "example.com" {
+				return pgx.ErrNoRows
+			}
+		}
+	}
+	// For other queries (GetAddressByNameAndDomain, CreateEmail), return success.
+	return nil
 }
 
 func TestMain(m *testing.M) {
