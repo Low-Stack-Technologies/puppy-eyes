@@ -12,5 +12,6 @@ func main() {
 	connStr := "postgresql://puppy:pup@localhost:5432/pup?sslmode=disable"
 	db.Connect(ctx, connStr)
 
+	go smtp.StartWorker(ctx)
 	smtp.StartListening()
 }

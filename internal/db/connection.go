@@ -8,11 +8,13 @@ import (
 )
 
 var Q *Queries
+var Pool *pgxpool.Pool
 
 func Connect(ctx context.Context, connStr string) {
 	pool, err := pgxpool.New(ctx, connStr)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
+	Pool = pool
 	Q = New(pool)
 }

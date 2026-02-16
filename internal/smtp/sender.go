@@ -13,11 +13,10 @@ import (
 	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
 )
 
-// SendEmail handles sending an email from an authenticated user.
-// It saves the email to the database and then attempts to relay it to the recipients' mail servers.
+// SendEmail handles enqueuing an email from an authenticated user.
 func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipients []string, body string) error {
 	// 1. Save the email to the database
-	_, err := db.Q.CreateEmail(ctx, db.CreateEmailParams{
+	emailID, err := db.Q.CreateEmail(ctx, db.CreateEmailParams{
 		Sender:            sender,
 		Recipients:        recipients,
 		Body:              body,
@@ -30,7 +29,20 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 		return fmt.Errorf("failed to save outgoing email: %w", err)
 	}
 
-	// 2. Group recipients by domain to minimize connections
+	// 2. Enqueue the email
+	_, err = db.Q.EnqueueEmail(ctx, emailID)
+	if err != nil {
+		return fmt.Errorf("failed to enqueue email: %w", err)
+	}
+
+	log.Printf("Email from %s enqueued (ID: %s)", sender, emailID)
+	return nil
+}
+
+// RelayEmail attempts to send an email to its recipients by looking up MX records.
+// This is used by the background worker.
+func RelayEmail(ctx context.Context, sender string, recipients []string, body string) error {
+	// 1. Group recipients by domain to minimize connections
 	domainGroups := make(map[string][]string)
 	for _, recipient := range recipients {
 		addr := strings.Trim(recipient, "<>")
@@ -44,12 +56,14 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 	}
 
 	senderAddr := strings.Trim(sender, "<>")
+	var lastErr error
 
-	// 3. For each domain, lookup MX records and try to send
+	// 2. For each domain, lookup MX records and try to send
 	for domain, domainRecipients := range domainGroups {
 		hosts, err := dns.LookupMX(domain)
 		if err != nil {
 			log.Printf("Failed to lookup MX for domain %s: %v", domain, err)
+			lastErr = err
 			continue
 		}
 
@@ -61,21 +75,22 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 		success := false
 		for _, host := range hosts {
 			addr := net.JoinHostPort(host, "25")
-			log.Printf("Attempting to send to %s via %s", domain, addr)
+			log.Printf("Attempting to relay to %s via %s", domain, addr)
 
 			err := smtp.SendMail(addr, nil, senderAddr, domainRecipients, []byte(body))
 			if err != nil {
-				log.Printf("Failed to send to %s via %s: %v", domain, host, err)
+				log.Printf("Failed to relay to %s via %s: %v", domain, host, err)
+				lastErr = err
 				continue
 			}
 
-			log.Printf("Successfully sent email to %s via %s", domain, host)
+			log.Printf("Successfully relayed email to %s via %s", domain, host)
 			success = true
 			break
 		}
 
 		if !success {
-			log.Printf("Failed to send email to any MX for domain %s", domain)
+			return fmt.Errorf("failed to relay to domain %s: %w", domain, lastErr)
 		}
 	}
 

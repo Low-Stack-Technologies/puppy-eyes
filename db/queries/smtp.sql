@@ -12,3 +12,42 @@ INSERT INTO emails (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
 ) RETURNING id;
+
+-- name: EnqueueEmail :one
+INSERT INTO email_queue (
+    email_id, status, next_attempt_at
+) VALUES (
+    $1, 'pending', NOW()
+) RETURNING id;
+
+-- name: GetNextEmailFromQueue :one
+SELECT eq.*, e.sender, e.recipients, e.body
+FROM email_queue eq
+JOIN emails e ON eq.email_id = e.id
+WHERE (eq.status = 'pending' OR eq.status = 'failed')
+  AND eq.next_attempt_at <= NOW()
+ORDER BY eq.next_attempt_at ASC
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
+-- name: UpdateQueueStatus :exec
+UPDATE email_queue
+SET status = $2,
+    retry_count = $3,
+    last_attempt_at = NOW(),
+    next_attempt_at = $4,
+    last_error = $5
+WHERE id = $1;
+
+-- name: MarkEmailAsProcessing :exec
+UPDATE email_queue
+SET status = 'processing',
+    last_attempt_at = NOW()
+WHERE id = $1;
+
+-- name: MarkEmailAsSent :exec
+UPDATE email_queue
+SET status = 'sent',
+    last_attempt_at = NOW(),
+    last_error = NULL
+WHERE id = $1;
