@@ -1,15 +1,6 @@
 -- +migrate Up
 
 -- +migrate StatementBegin
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
--- +migrate StatementEnd
-
--- +migrate StatementBegin
 CREATE TABLE domains (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -19,11 +10,37 @@ CREATE TABLE domains (
 -- +migrate StatementEnd
 
 -- +migrate StatementBegin
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+-- +migrate StatementEnd
+
+-- +migrate StatementBegin
 CREATE TABLE addresses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     domain UUID REFERENCES domains(id),
-    user_id UUID REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+-- +migrate StatementEnd
+
+-- +migrate StatementBegin
+CREATE TABLE user_address (
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    address_id UUID REFERENCES addresses(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, address_id)
+);
+-- +migrate StatementEnd
+
+-- +migrate StatementBegin
+CREATE TABLE mailboxes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    parent_id UUID REFERENCES mailboxes(id), -- If NULL, its in the root
+    address_id UUID REFERENCES addresses(id) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 -- +migrate StatementEnd
@@ -34,7 +51,6 @@ CREATE TABLE emails (
     sender TEXT NOT NULL,
     recipients TEXT[] NOT NULL,
     body TEXT NOT NULL,
-    authenticated_user UUID REFERENCES users(id),
     spf_pass BOOLEAN,
     dmarc_pass BOOLEAN,
     dkim_pass BOOLEAN,
@@ -43,22 +59,36 @@ CREATE TABLE emails (
 -- +migrate StatementEnd
 
 -- +migrate StatementBegin
-INSERT INTO users (username, password) VALUES ('user', 'password');
+CREATE TABLE email_mailbox (
+    email_id UUID REFERENCES emails(id) ON DELETE CASCADE,
+    mailbox_id UUID REFERENCES mailboxes(id) ON DELETE CASCADE,
+    PRIMARY KEY (email_id, mailbox_id)
+);
 -- +migrate StatementEnd
 
 -- +migrate StatementBegin
-INSERT INTO domains (name, smtp_domain) VALUES ('example.com', 'smtp.example.com');
+CREATE TYPE email_status AS ENUM ('pending', 'processing', 'sent', 'failed');
 -- +migrate StatementEnd
 
 -- +migrate StatementBegin
-INSERT INTO addresses (name, domain, user_id)
-SELECT 'user', d.id, u.id
-FROM domains d, users u
-WHERE d.name = 'example.com' AND u.username = 'user';
+CREATE TABLE email_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email_id UUID NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    status email_status NOT NULL DEFAULT 'pending',
+    retry_count INT NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMP WITH TIME ZONE,
+    next_attempt_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    last_error TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 -- +migrate StatementEnd
 
 -- +migrate Down
+DROP TABLE email_queue;
+DROP TYPE email_status;
+DROP TABLE email_mailbox;
 DROP TABLE emails;
+DROP TABLE mailboxes;
 DROP TABLE addresses;
-DROP TABLE domains;
 DROP TABLE users;
+DROP TABLE domains;
