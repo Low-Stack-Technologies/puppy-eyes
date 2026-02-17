@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/low-stack-technologies/puppy-eyes/internal/db"
 )
 
@@ -36,9 +37,30 @@ type mockRow struct {
 }
 
 func (r *mockRow) Scan(dest ...interface{}) error {
-	// For GetUserByCredentials, return NoRows to simulate auth failure in existing tests.
+	// For GetUserByCredentials, return success if username is "validuser"
 	if strings.Contains(r.query, "GetUserByCredentials") {
+		if len(r.args) > 0 && r.args[0].(string) == "validuser" {
+			id := dest[0].(*pgtype.UUID)
+			id.Bytes = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+			id.Valid = true
+			return nil
+		}
 		return pgx.ErrNoRows
+	}
+
+	// For IsAddressOwnedByUser
+	if strings.Contains(r.query, "IsAddressOwnedByUser") {
+		if len(r.args) > 0 {
+			name := r.args[0].(string)
+			owned := dest[0].(*bool)
+			// Mock: only "owned@yourdomain.com" is owned by the user
+			if name == "owned" {
+				*owned = true
+			} else {
+				*owned = false
+			}
+			return nil
+		}
 	}
 
 	// For MTARelayProtection test & others: fail if domain is unknown
@@ -445,5 +467,45 @@ func TestHandleSMTPConnection_MAIL_Malformed(t *testing.T) {
 	line, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(line, "501") {
 		t.Errorf("Expected 501 Syntax error, got %s", line)
+	}
+}
+
+// TestHandleSMTPConnection_AuthenticatedMailOwnership verifies that an authenticated user
+// can only use a MAIL FROM address that they own.
+func TestHandleSMTPConnection_AuthenticatedMailOwnership(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+
+	reader := bufio.NewReader(client)
+	reader.ReadString('\n') // Greeting
+
+	fmt.Fprintf(client, "EHLO localhost\r\n")
+	for {
+		line, _ := reader.ReadString('\n')
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+	}
+
+	// Authenticate as "validuser"
+	// dmfsaWR1c2VyAHZhbGlkdXNlcgBwYXNz is "validuser\x00validuser\x00pass" base64 encoded.
+	fmt.Fprintf(client, "AUTH PLAIN dmfsaWR1c2VyAHZhbGlkdXNlcgBwYXNz\r\n")
+	reader.ReadString('\n')
+
+	// Try to send from an unowned address
+	fmt.Fprintf(client, "MAIL FROM:<spoofed@yourdomain.com>\r\n")
+	line, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(line, "550") {
+		t.Errorf("Expected 550 Sender address rejected, got %s", line)
+	}
+
+	// Try to send from an owned address
+	fmt.Fprintf(client, "MAIL FROM:<owned@yourdomain.com>\r\n")
+	line, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(line, "250") {
+		t.Errorf("Expected 250 OK for owned address, got %s", line)
 	}
 }

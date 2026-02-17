@@ -176,15 +176,33 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 			}
 
 			envelopeFrom = parts[1][5:]
+			addr := strings.Trim(envelopeFrom, "<>")
+			idx := strings.LastIndex(addr, "@")
+			if idx == -1 {
+				conn.Write([]byte("501 5.1.7 Bad sender address syntax\r\n"))
+				continue
+			}
+
+			// If authenticated, verify the user owns this address
+			if authenticatedUserID.Valid {
+				namePart := addr[:idx]
+				domainPart := addr[idx+1:]
+
+				isOwned, err := db.Q.IsAddressOwnedByUser(context.Background(), db.IsAddressOwnedByUserParams{
+					Name:   namePart,
+					Name_2: domainPart,
+					UserID: authenticatedUserID,
+				})
+				if err != nil || !isOwned {
+					log.Printf("User %s tried to send from unauthorized address: %s", authenticatedUserID, addr)
+					conn.Write([]byte("550 5.7.1 Sender address rejected: not owned by user\r\n"))
+					envelopeFrom = ""
+					continue
+				}
+			}
 
 			// Perform SPF check for incoming server-to-server mail
 			if connectionType == SERVER_TO_SERVER_MTA {
-				addr := strings.Trim(envelopeFrom, "<>")
-				idx := strings.LastIndex(addr, "@")
-				if idx == -1 {
-					conn.Write([]byte("501 5.1.7 Bad sender address syntax\r\n"))
-					continue
-				}
 				domainPart := addr[idx+1:]
 				remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 

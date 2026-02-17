@@ -6,6 +6,13 @@ WHERE name = $1;
 SELECT id, name, domain, user_id, created_at FROM addresses
 WHERE name = $1 AND domain = $2;
 
+-- name: IsAddressOwnedByUser :one
+SELECT EXISTS (
+    SELECT 1 FROM addresses a
+    JOIN domains d ON a.domain = d.id
+    WHERE a.name = $1 AND d.name = $2 AND a.user_id = $3
+)::boolean;
+
 -- name: CreateEmail :one
 INSERT INTO emails (
     sender, recipients, body, authenticated_user, spf_pass, dmarc_pass, dkim_pass
