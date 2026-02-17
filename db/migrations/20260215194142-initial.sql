@@ -36,12 +36,19 @@ CREATE TABLE user_address (
 -- +migrate StatementEnd
 
 -- +migrate StatementBegin
+CREATE TYPE mailbox_type AS ENUM ('INBOX', 'DRAFTS', 'SENT', 'TRASH', 'SPAM', 'ARCHIVE');
+-- +migrate StatementEnd
+
+-- +migrate StatementBegin
 CREATE TABLE mailboxes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
+    type mailbox_type,
     parent_id UUID REFERENCES mailboxes(id), -- If NULL, its in the root
     address_id UUID REFERENCES addresses(id) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    UNIQUE (name, parent_id),
+    UNIQUE (address_id, type)
 );
 -- +migrate StatementEnd
 
@@ -89,6 +96,8 @@ DROP TYPE email_status;
 DROP TABLE email_mailbox;
 DROP TABLE emails;
 DROP TABLE mailboxes;
+DROP TYPE mailbox_type;
+DROP TABLE user_address;
 DROP TABLE addresses;
 DROP TABLE users;
 DROP TABLE domains;

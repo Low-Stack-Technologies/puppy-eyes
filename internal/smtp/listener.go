@@ -175,25 +175,33 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 				continue
 			}
 
+			// Set the envelop from address and trim for later use
 			envelopeFrom = parts[1][5:]
 			addr := strings.Trim(envelopeFrom, "<>")
 			idx := strings.LastIndex(addr, "@")
 			if idx == -1 {
-				conn.Write([]byte("501 5.1.7 Bad sender address syntax\r\n"))
+				conn.Write([]byte("550 5.7.1 Invalid sender domain\r\n"))
+				envelopeFrom = ""
 				continue
 			}
 
 			// If authenticated, verify the user owns this address
 			if authenticatedUserID.Valid {
-				namePart := addr[:idx]
-				domainPart := addr[idx+1:]
+				// Get the address from
+				address, err := db.Q.GetAddressFromEmailAddress(context.Background(), addr)
+				if err != nil {
+					log.Printf("User %s tried to send from unauthorized address: %s", authenticatedUserID, addr)
+					conn.Write([]byte("550 5.7.1 Sender address rejected: not owned by user\r\n"))
+					envelopeFrom = ""
+					continue
+				}
 
-				isOwned, err := db.Q.IsAddressOwnedByUser(context.Background(), db.IsAddressOwnedByUserParams{
-					Name:   namePart,
-					Name_2: domainPart,
+				// Check if authenticated user has access to the address
+				hasAccess, err := db.Q.UserHasAccessToAddress(context.Background(), db.UserHasAccessToAddressParams{
+					ID:     address.ID,
 					UserID: authenticatedUserID,
 				})
-				if err != nil || !isOwned {
+				if err != nil || !hasAccess {
 					log.Printf("User %s tried to send from unauthorized address: %s", authenticatedUserID, addr)
 					conn.Write([]byte("550 5.7.1 Sender address rejected: not owned by user\r\n"))
 					envelopeFrom = ""

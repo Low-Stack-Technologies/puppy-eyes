@@ -15,21 +15,45 @@ import (
 
 // SendEmail handles enqueuing an email from an authenticated user.
 func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipients []string, body string) error {
-	// 1. Save the email to the database
+	// 1. Find the sender address
+	log.Printf("Sender: %s", sender)
+	senderAddr, err := db.Q.GetAddressFromEmailAddress(ctx, strings.Trim(sender, "<>"))
+	if err != nil {
+		return fmt.Errorf("failed to find sender address: %w", err)
+	}
+
+	// 2. Save the email to the database
 	emailID, err := db.Q.CreateEmail(ctx, db.CreateEmailParams{
-		Sender:            sender,
-		Recipients:        recipients,
-		Body:              body,
-		AuthenticatedUser: userID,
-		SpfPass:           pgtype.Bool{Valid: false},
-		DmarcPass:         pgtype.Bool{Valid: false},
-		DkimPass:          pgtype.Bool{Valid: false},
+		Sender:     sender,
+		Recipients: recipients,
+		Body:       body,
+		SpfPass:    pgtype.Bool{Valid: false},
+		DmarcPass:  pgtype.Bool{Valid: false},
+		DkimPass:   pgtype.Bool{Valid: false},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to save outgoing email: %w", err)
 	}
 
-	// 2. Enqueue the email
+	// 3. Find the sent mailbox
+	sentMailbox, err := db.Q.GetMailboxOfTypeForAddress(ctx, db.GetMailboxOfTypeForAddressParams{
+		Column1:   db.MailboxTypeSENT,
+		AddressID: senderAddr.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to find sent mailbox: %w", err)
+	}
+
+	// 4. Add the email to the sent mailbox
+	err = db.Q.AssociateEmailToMailbox(ctx, db.AssociateEmailToMailboxParams{
+		EmailID:   emailID,
+		MailboxID: sentMailbox.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to associate email with sent mailbox: %w", err)
+	}
+
+	// 3. Enqueue the email
 	_, err = db.Q.EnqueueEmail(ctx, emailID)
 	if err != nil {
 		return fmt.Errorf("failed to enqueue email: %w", err)

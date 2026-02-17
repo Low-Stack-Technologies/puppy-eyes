@@ -3,29 +3,42 @@ SELECT id, name, smtp_domain, created_at FROM domains
 WHERE name = $1;
 
 -- name: GetAddressByNameAndDomain :one
-SELECT id, name, domain, user_id, created_at FROM addresses
+SELECT id, name, domain, created_at FROM addresses
 WHERE name = $1 AND domain = $2;
 
--- name: IsAddressOwnedByUser :one
+-- name: UserHasAccessToAddress :one
 SELECT EXISTS (
     SELECT 1 FROM addresses a
-    JOIN domains d ON a.domain = d.id
-    WHERE a.name = $1 AND d.name = $2 AND a.user_id = $3
+    JOIN user_address ua ON a.id = ua.address_id
+    WHERE a.id = $1 AND ua.user_id = $2
 )::boolean;
+
+-- name: GetAddressFromEmailAddress :one
+SELECT a.*
+FROM addresses a
+JOIN domains d ON a.domain = d.id
+WHERE
+    a.name = split_part($1, '@', 1) AND
+    d.name = split_part($1, '@', 2)
+LIMIT 1;
 
 -- name: CreateEmail :one
 INSERT INTO emails (
-    sender, recipients, body, authenticated_user, spf_pass, dmarc_pass, dkim_pass
+    sender, recipients, body, spf_pass, dmarc_pass, dkim_pass
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    $1, $2, $3, $4, $5, $6
 ) RETURNING id;
 
+-- name: AssociateEmailToMailbox :exec
+INSERT INTO email_mailbox (email_id, mailbox_id) VALUES ($1, $2);
+
+-- name: GetMailboxOfTypeForAddress :one
+SELECT id, name, type, parent_id, address_id, created_at
+FROM mailboxes
+WHERE type = $1::mailbox_type AND address_id = $2;
+
 -- name: EnqueueEmail :one
-INSERT INTO email_queue (
-    email_id, status, next_attempt_at
-) VALUES (
-    $1, 'pending', NOW()
-) RETURNING id;
+INSERT INTO email_queue (email_id) VALUES ($1) RETURNING id;
 
 -- name: GetNextEmailFromQueue :one
 SELECT eq.*, e.sender, e.recipients, e.body
