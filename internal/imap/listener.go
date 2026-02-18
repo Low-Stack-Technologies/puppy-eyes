@@ -45,11 +45,11 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 
 		tag := parts[0]
 		var cmd string
+		var args []string
 		if len(parts) > 1 {
 			cmd = strings.ToUpper(parts[1])
+			args = parts[2:]
 		}
-
-		args := parts[2:]
 
 		switch cmd {
 		case "CAPABILITY":
@@ -105,11 +105,20 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 			}
 			authType := strings.ToUpper(args[0])
 			if authType == "PLAIN" {
-				session.conn.Write([]byte("+ \r\n"))
-				payload, err := tcp.ReadData(session.reader)
-				if err != nil {
-					return
+				var payload string
+				if len(args) > 1 {
+					payload = args[1]
+				} else {
+					session.conn.Write([]byte("+ \r\n"))
+					var err error
+					payload, err = tcp.ReadData(session.reader)
+					if err != nil {
+						// Log the error for debugging purposes.
+						log.Printf("Error reading AUTHENTICATE PLAIN payload: %v", err)
+						return
+					}
 				}
+
 				decoded, err := base64.StdEncoding.DecodeString(payload)
 				if err != nil {
 					session.conn.Write([]byte(fmt.Sprintf("%s NO Invalid base64\r\n", tag)))

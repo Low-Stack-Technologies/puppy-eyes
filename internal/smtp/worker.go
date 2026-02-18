@@ -70,13 +70,16 @@ func processQueue(ctx context.Context) {
 				nextAttempt = pgtype.Timestamptz{Time: time.Now().Add(delay), Valid: true}
 				log.Printf("Worker: scheduling retry for email %s in %v", item.ID, delay)
 
-				err = qtx.UpdateQueueStatus(ctx, db.UpdateQueueStatusParams{
+				if err = qtx.UpdateQueueStatus(ctx, db.UpdateQueueStatusParams{
 					ID:            item.ID,
 					Status:        db.EmailStatusFailed,
 					RetryCount:    retryCount,
 					NextAttemptAt: nextAttempt,
 					LastError:     pgtype.Text{String: err.Error(), Valid: true},
-				})
+				}); err != nil {
+					log.Printf("Failed to schedule retry for email %s, because %s", item.ID, err)
+					continue
+				}
 			} else {
 				log.Printf("Worker: max retries reached for email %s. Giving up.", item.ID)
 				err = qtx.UpdateQueueStatus(ctx, db.UpdateQueueStatusParams{
