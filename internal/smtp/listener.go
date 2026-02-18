@@ -364,6 +364,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
 func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_TYPE) {
 	// Handle the wait group
 	defer wg.Done()
+
 	// Listen on the specified port
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -383,7 +384,9 @@ func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_T
 	}
 }
 
-func StartListening() {
+func StartListening(rwg *sync.WaitGroup) {
+	defer rwg.Done()
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 

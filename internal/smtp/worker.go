@@ -3,6 +3,7 @@ package smtp
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -10,7 +11,9 @@ import (
 )
 
 // StartWorker begins the background process of sending queued emails.
-func StartWorker(ctx context.Context) {
+func StartWorker(ctx context.Context, rwg *sync.WaitGroup) {
+	defer rwg.Done()
+
 	log.Println("Starting SMTP background worker...")
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -54,19 +57,19 @@ func processQueue(ctx context.Context) {
 		// 3. Attempt to relay the email
 		log.Printf("Worker: processing email %s (Attempt: %d)", item.ID, item.RetryCount+1)
 		err = RelayEmail(ctx, item.Sender, item.Recipients, item.Body)
-		
+
 		if err != nil {
 			log.Printf("Worker: failed to relay email %s: %v", item.ID, err)
-			
+
 			retryCount := item.RetryCount + 1
 			var nextAttempt pgtype.Timestamptz
-			
+
 			if retryCount < 10 {
 				// Exponential backoff: 1m, 2m, 4m, 8m, 16m...
 				delay := time.Duration(1<<uint(retryCount)) * time.Minute
 				nextAttempt = pgtype.Timestamptz{Time: time.Now().Add(delay), Valid: true}
 				log.Printf("Worker: scheduling retry for email %s in %v", item.ID, delay)
-				
+
 				err = qtx.UpdateQueueStatus(ctx, db.UpdateQueueStatusParams{
 					ID:            item.ID,
 					Status:        db.EmailStatusFailed,
