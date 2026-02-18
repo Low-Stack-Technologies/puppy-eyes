@@ -1,7 +1,7 @@
 # IMAP Implementation Issues & TODOs
 
 ## Protocol Compliance & Capability Advertisement
-- [ ] **Fix CAPABILITY after STARTTLS**: 
+- [x] **Fix CAPABILITY after STARTTLS**: 
   - Currently, `AUTH=PLAIN` is not advertised in the capability list. 
   - `curl` fails with "SASL: no auth mechanism was offered or recognized" because the server claims to support `SASL-IR` but lists no authentication mechanisms (like `AUTH=PLAIN`) in the capability response.
   - *Action*: Add `AUTH=PLAIN` to the capabilities list, especially after TLS is established.

@@ -28,11 +28,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 	defer session.conn.Close()
 
 	// 1. Greeting
-	capabilities := "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE LITERAL+ STARTTLS"
-	if !session.isTLS {
-		capabilities += " LOGINDISABLED"
-	}
-	session.conn.Write([]byte(fmt.Sprintf("* OK [%s] IMAP4rev1 Service Ready\r\n", capabilities)))
+	session.conn.Write([]byte(fmt.Sprintf("* OK [%s] IMAP4rev1 Service Ready\r\n", session.getCapabilities())))
 
 	// 2. Command loop
 	for {
@@ -57,11 +53,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 
 		switch cmd {
 		case "CAPABILITY":
-			caps := "* CAPABILITY IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE LITERAL+ STARTTLS"
-			if !session.isTLS {
-				caps += " LOGINDISABLED"
-			}
-			session.conn.Write([]byte(caps + "\r\n"))
+			session.conn.Write([]byte("* CAPABILITY " + session.getCapabilities() + "\r\n"))
 			session.conn.Write([]byte(fmt.Sprintf("%s OK CAPABILITY completed\r\n", tag)))
 
 		case "STARTTLS":

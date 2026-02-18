@@ -19,6 +19,16 @@ type imapSession struct {
 	selectedMailbox     *db.GetMailboxByNameForUserRow
 }
 
+func (session *imapSession) getCapabilities() string {
+	caps := "IMAP4rev1 SASL-IR LOGIN-REFERRALS ID ENABLE IDLE LITERAL+ "
+	if session.isTLS {
+		caps += "AUTH=PLAIN"
+	} else {
+		caps += "STARTTLS LOGINDISABLED"
+	}
+	return caps
+}
+
 func (session *imapSession) sendFetchResponse(tag string, isUID bool, data string, args []string) {
 	if len(args) < 1 {
 		session.conn.Write([]byte(fmt.Sprintf("%s BAD Missing sequence set\r\n", tag)))
