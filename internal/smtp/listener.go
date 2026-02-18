@@ -216,7 +216,10 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				var err error
 				spfPass, err = dns.VerifySPF(remoteIP, domainPart)
 				if err != nil || !spfPass {
-					log.Printf("SPF validation failed for domain %s from IP %s", domainPart, remoteIP)
+					log.Printf("SPF validation failed for domain %s from IP %s, reason: %s", domainPart, remoteIP, err)
+					conn.Write([]byte("550 5.7.1 Sender address rejected: SPF check failed\r\n"))
+					envelopeFrom = ""
+					continue
 				}
 			}
 			conn.Write([]byte("250 OK\r\n"))
