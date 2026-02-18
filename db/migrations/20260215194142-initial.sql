@@ -69,6 +69,7 @@ CREATE TABLE emails (
 CREATE TABLE email_mailbox (
     email_id UUID REFERENCES emails(id) ON DELETE CASCADE,
     mailbox_id UUID REFERENCES mailboxes(id) ON DELETE CASCADE,
+    flags TEXT[] NOT NULL DEFAULT '{}',
     PRIMARY KEY (email_id, mailbox_id)
 );
 -- +migrate StatementEnd

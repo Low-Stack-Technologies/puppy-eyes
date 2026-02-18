@@ -46,6 +46,7 @@ func ReceiveEmail(ctx context.Context, sender string, recipients []string, body 
 		err = db.Q.AssociateEmailToMailbox(ctx, db.AssociateEmailToMailboxParams{
 			EmailID:   emailID,
 			MailboxID: inboxMailbox.ID,
+			Flags:     []string{"\\Recent"},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to associate email with inbox mailbox: %w", err)

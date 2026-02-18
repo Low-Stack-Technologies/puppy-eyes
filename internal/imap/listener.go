@@ -98,6 +98,10 @@ func formatIMAPAddressList(emails []string) string {
 	return sb.String()
 }
 
+func formatIMAPFlags(flags []string) string {
+	return "(" + strings.Join(flags, " ") + ")"
+}
+
 func getHeader(fullBody, field string) string {
 	parts := strings.SplitN(fullBody, "\r\n\r\n", 2)
 	headerSection := parts[0]
@@ -127,7 +131,7 @@ func extractHeaders(fullBody string, fields []string) string {
 	headerSection := parts[0]
 	headerLines := strings.Split(headerSection, "\r\n")
 	var filtered []string
-	
+
 	for _, field := range fields {
 		fieldLower := strings.ToLower(field) + ":"
 		for i := 0; i < len(headerLines); i++ {
@@ -209,7 +213,7 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 
 		// FLAGS
 		if strings.Contains(upperData, "FLAGS") || strings.Contains(upperData, "ALL") || strings.Contains(upperData, "FAST") || strings.Contains(upperData, "FULL") {
-			items = append(items, "FLAGS (\\Seen)")
+			items = append(items, fmt.Sprintf("FLAGS %s", formatIMAPFlags(e.Flags)))
 		}
 
 		// INTERNALDATE
@@ -231,17 +235,17 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 			if envelopeDate == "" {
 				envelopeDate = e.CreatedAt.Time.Format("Mon, 02 Jan 2006 15:04:05 -0700")
 			}
-			
+
 			subject := getHeader(e.Body, "Subject")
 			messageID := getHeader(e.Body, "Message-ID")
 			inReplyTo := getHeader(e.Body, "In-Reply-To")
-			
+
 			fromList := formatIMAPAddressList([]string{e.Sender})
 			toList := formatIMAPAddressList(e.Recipients)
-			
+
 			// ENVELOPE (date subject from sender reply-to to cc bcc in-reply-to message-id)
 			envelope := fmt.Sprintf("(%s %s %s %s %s %s NIL NIL %s %s)",
-				quoteIMAP(envelopeDate), quoteIMAP(subject), fromList, fromList, fromList, toList, 
+				quoteIMAP(envelopeDate), quoteIMAP(subject), fromList, fromList, fromList, toList,
 				quoteIMAP(inReplyTo), quoteIMAP(messageID))
 			items = append(items, fmt.Sprintf("ENVELOPE %s", envelope))
 		}
@@ -255,7 +259,7 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 			if len(items) > 0 {
 				sb.WriteString(" ")
 			}
-			
+
 			// Check if specifically requesting Header Fields
 			if idx := strings.Index(upperData, "HEADER.FIELDS ("); idx != -1 {
 				sub := data[idx+len("HEADER.FIELDS ("):]
@@ -280,6 +284,127 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 	okMsg := "Fetch completed"
 	if isUID {
 		okMsg = "UID Fetch completed"
+	}
+	session.conn.Write([]byte(fmt.Sprintf("%s OK %s\r\n", tag, okMsg)))
+}
+
+func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
+	if session.selectedMailbox == nil {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Select a mailbox first\r\n", tag)))
+		return
+	}
+	if len(args) < 3 {
+		session.conn.Write([]byte(fmt.Sprintf("%s BAD Missing arguments for STORE\r\n", tag)))
+		return
+	}
+
+	seqSet := args[0]
+	item := strings.ToUpper(args[1])
+	flagsPart := args[2]
+
+	// Parse flags from "( \Seen \Answered )" or " \Seen"
+	flagsPart = strings.Trim(flagsPart, "()")
+	newFlags := strings.Fields(flagsPart)
+
+	silent := strings.HasSuffix(item, ".SILENT")
+	op := "SET"
+	if strings.HasPrefix(item, "+") {
+		op = "ADD"
+	} else if strings.HasPrefix(item, "-") {
+		op = "REMOVE"
+	}
+
+	emails, _ := db.Q.GetEmailsInMailbox(context.Background(), session.selectedMailbox.ID)
+
+	for i, e := range emails {
+		msgNum := i + 1
+		uid := msgNum // Mock UID
+
+		target := msgNum
+		if isUID {
+			target = uid
+		}
+
+		// Reuse the logic for sequence sets
+		shouldUpdate := false
+		if seqSet == "*" || seqSet == "1:*" {
+			shouldUpdate = true
+		} else if strings.Contains(seqSet, ":") {
+			parts := strings.Split(seqSet, ":")
+			if len(parts) == 2 {
+				start := 0
+				fmt.Sscanf(parts[0], "%d", &start)
+				if parts[1] == "*" {
+					if target >= start {
+						shouldUpdate = true
+					}
+				} else {
+					end := 0
+					fmt.Sscanf(parts[1], "%d", &end)
+					if target >= start && target <= end {
+						shouldUpdate = true
+					}
+				}
+			}
+		} else {
+			val := 0
+			fmt.Sscanf(seqSet, "%d", &val)
+			if target == val {
+				shouldUpdate = true
+			}
+		}
+
+		if !shouldUpdate {
+			continue
+		}
+
+		// Calculate updated flags
+		var finalFlags []string
+		currentFlagsMap := make(map[string]bool)
+		for _, f := range e.Flags {
+			currentFlagsMap[f] = true
+		}
+
+		switch op {
+		case "SET":
+			finalFlags = newFlags
+		case "ADD":
+			for _, f := range newFlags {
+				currentFlagsMap[f] = true
+			}
+			for f := range currentFlagsMap {
+				finalFlags = append(finalFlags, f)
+			}
+		case "REMOVE":
+			for _, f := range newFlags {
+				delete(currentFlagsMap, f)
+			}
+			for f := range currentFlagsMap {
+				finalFlags = append(finalFlags, f)
+			}
+		}
+
+		// Update Database
+		db.Q.UpdateEmailFlags(context.Background(), db.UpdateEmailFlagsParams{
+			EmailID:   e.ID,
+			MailboxID: session.selectedMailbox.ID,
+			Flags:     finalFlags,
+		})
+
+		// Send untagged response if not silent
+		if !silent {
+			res := fmt.Sprintf("* %d FETCH (FLAGS (%s)", msgNum, strings.Join(finalFlags, " "))
+			if isUID {
+				res += fmt.Sprintf(" UID %d", uid)
+			}
+			res += ")\r\n"
+			session.conn.Write([]byte(res))
+		}
+	}
+
+	okMsg := "Store completed"
+	if isUID {
+		okMsg = "UID Store completed"
 	}
 	session.conn.Write([]byte(fmt.Sprintf("%s OK %s\r\n", tag, okMsg)))
 }
@@ -421,7 +546,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 				session.conn.Write([]byte(fmt.Sprintf("%s BAD Missing arguments for %s\r\n", tag, cmd)))
 				continue
 			}
-			
+
 			mailbox := strings.Trim(args[1], "\"")
 			if mailbox == "" {
 				// Delimiter discovery: Return the hierarchy delimiter and a NIL root
@@ -464,7 +589,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 			}
 
 			emails, _ := db.Q.GetEmailsInMailbox(context.Background(), mailbox.ID)
-			
+
 			var statusItems []string
 			if strings.Contains(itemsStr, "MESSAGES") {
 				statusItems = append(statusItems, fmt.Sprintf("MESSAGES %d", len(emails)))
@@ -495,7 +620,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 				continue
 			}
 			mailboxName := strings.Trim(args[0], "\"")
-			
+
 			// Get the address ID for this user
 			addressID, err := db.Q.GetAddressIDForUser(context.Background(), session.authenticatedUserID)
 			if err != nil {
@@ -560,13 +685,14 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 					continue
 				}
 				session.sendFetchResponse(tag, true, data, args[1:])
+			} else if subCmd == "STORE" {
+				session.handleStore(tag, true, args[1:])
 			} else {
 				session.conn.Write([]byte(fmt.Sprintf("%s BAD Unsupported UID sub-command\r\n", tag)))
 			}
 
 		case "STORE":
-			log.Println("STORE command received: To be implemented")
-			session.conn.Write([]byte(fmt.Sprintf("%s OK Store completed\r\n", tag)))
+			session.handleStore(tag, false, args)
 
 		case "EXPUNGE":
 			log.Println("EXPUNGE command received: To be implemented")

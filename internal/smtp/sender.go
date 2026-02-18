@@ -48,6 +48,7 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 	err = db.Q.AssociateEmailToMailbox(ctx, db.AssociateEmailToMailboxParams{
 		EmailID:   emailID,
 		MailboxID: sentMailbox.ID,
+		Flags:     []string{"\\Seen"},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to associate email with sent mailbox: %w", err)
