@@ -17,6 +17,7 @@ type imapSession struct {
 	isTLS               bool
 	authenticatedUserID pgtype.UUID
 	selectedMailbox     *db.GetMailboxByNameForUserRow
+	updates             chan struct{} // Channel to signal updates for IDLE command
 }
 
 func (session *imapSession) getCapabilities() string {
@@ -267,6 +268,14 @@ func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
 			MailboxID: session.selectedMailbox.ID,
 			Flags:     finalFlags,
 		})
+
+		// Signal an update for IDLE sessions
+		select {
+		case session.updates <- struct{}{}:
+		default:
+			// Non-blocking send, if the channel is full,
+			// it means an update is already pending.
+		}
 
 		// Send untagged response if not silent
 		if !silent {

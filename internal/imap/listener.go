@@ -24,6 +24,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 		conn:   conn,
 		reader: bufio.NewReader(conn),
 		isTLS:  isTLS,
+		updates: make(chan struct{}, 1), // Buffered channel for updates
 	}
 	defer session.conn.Close()
 
@@ -310,21 +311,51 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 			session.conn.Write([]byte(fmt.Sprintf("%s OK ID completed\r\n", tag)))
 
 		case "IDLE":
+			if !session.authenticatedUserID.Valid || session.selectedMailbox == nil {
+				session.conn.Write([]byte(fmt.Sprintf("%s NO Authenticate and select a mailbox first\r\n", tag)))
+				continue
+			}
+
 			session.conn.Write([]byte("+ idling\r\n"))
-			// Wait for DONE
+
+			idleCtx, cancelIdle := context.WithCancel(context.Background())
+			defer cancelIdle() // Ensure cancelIdle is called if we exit early
+
+			// Goroutine to send unsolicited updates
+			go func() {
+				for {
+					select {
+					case <-idleCtx.Done():
+						return // Stop monitoring when IDLE is terminated
+					case <-session.updates:
+						// An update occurred, send untagged responses
+						// Re-fetch email count to ensure it's up-to-date
+						emails, err := db.Q.GetEmailsInMailbox(context.Background(), session.selectedMailbox.ID)
+						if err != nil {
+							log.Printf("Error getting emails for IDLE update: %v", err)
+							continue
+						}
+						// Sending untagged responses
+						session.conn.Write([]byte(fmt.Sprintf("* %d EXISTS\r\n", len(emails))))
+						session.conn.Write([]byte("* 0 RECENT\r\n")) // For simplicity, always 0 RECENT for now
+					}
+				}
+			}()
+
+			// Wait for DONE from the client
 			for {
-				idleData, err := tcp.ReadData(session.reader)
+				data, err := tcp.ReadData(session.reader)
 				if err != nil {
-					return
+					log.Printf("IMAP IDLE read error: %v", err)
+					return // Terminate connection on read error
 				}
-				if strings.ToUpper(strings.TrimSpace(idleData)) == "DONE" {
-					break
+				if strings.ToUpper(strings.TrimSpace(data)) == "DONE" {
+					break // Exit IDLE mode
 				}
-				// If we get an empty line, keep waiting
-				if idleData == "" {
-					continue
-				}
-				// Any other data from the client technically violates IDLE but we should handle it
+				// If we receive anything else, it's a protocol violation, terminate IDLE
+				// and potentially the connection depending on strictness.
+				// For now, just terminate IDLE.
+				log.Printf("IMAP IDLE received unexpected command: %s", data)
 				break
 			}
 			session.conn.Write([]byte(fmt.Sprintf("%s OK Idle terminated\r\n", tag)))
