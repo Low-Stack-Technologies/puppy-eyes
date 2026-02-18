@@ -28,3 +28,21 @@
 
 - [x] **Fix `FETCH` Body Structure**:
   - The server sends `BODY[]` content. Ensure strict adherence to RFC 3501 for the body structure format to prevent parsing errors in stricter clients.
+
+## DNS & Email Security (SPF/DMARC)
+
+### SPF (RFC 7208)
+- [ ] **Missing Mechanisms**: Implement the `a`, `mx`, `ptr`, and `exists` mechanisms which are currently skipped. These are essential because many domains authorize their own IP addresses via their existing DNS records rather than explicit IP lists.
+- [ ] **Macro Support**: Add support for SPF macros like `%{i}`, `%{d}`, and `%{s}` which allow for dynamic record lookups based on sender attributes. Without this, records containing macros will fail to parse correctly or yield incorrect results.
+- [ ] **RFC-Compliant DNS Limits**: Enforce the strict RFC 7208 limit of 10 DNS-interactive mechanisms per SPF check to prevent Denial of Service attacks. This requires a counter that persists across nested `include` and `redirect` mechanisms.
+- [ ] **Result Granularity**: Expand the return types to distinguish between `Pass`, `Fail`, `SoftFail`, `Neutral`, `None`, `TempError`, and `PermError`. This granularity is necessary for sophisticated spam filtering and proper DMARC evaluation.
+
+### DMARC (RFC 7489)
+- [ ] **Alignment Checks**: Implement logic to verify that the domain in the `From:` header is in "alignment" with the domain validated by SPF or DKIM. This is the core of DMARC and prevents "friendly-from" spoofing where the envelope sender is valid but the visible sender is not.
+- [ ] **Organizational Domain Fallback**: If a DMARC record is not found for a subdomain, the implementation must look up the record for the organizational (root) domain. This ensures that policies applied to a top-level domain correctly protect its subdomains.
+- [ ] **Tag Support**: Support additional tags such as `pct` for graduated rollouts, `sp` for subdomain-specific policies, and `adkim`/`aspf` for strict vs. relaxed alignment modes. These tags allow domain owners to fine-tune how their policy is applied.
+- [ ] **Reporting**: Add the ability to generate and send Aggregate (RUA) and Forensic/Failure (RUF) reports as specified in the DMARC record. These reports provide domain owners with visibility into who is sending mail on their behalf.
+
+### DKIM
+- [ ] **DKIM Signature Verification**: Implement the cryptographic verification of `DKIM-Signature` headers using public keys retrieved from DNS. This provides a second, robust method of sender authentication that is more resilient to mail forwarding than SPF.
+- [ ] **DKIM Signing**: Implement the ability to sign outgoing emails with a DKIM signature using a private key. This involves generating the `DKIM-Signature` header by hashing the message body and selected headers, ensuring that our sent mail is verifiable by receiving servers and improving deliverability.
