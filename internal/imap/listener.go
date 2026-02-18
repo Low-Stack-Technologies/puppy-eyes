@@ -27,6 +27,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 		updates: make(chan struct{}, 1), // Buffered channel for updates
 	}
 	defer session.conn.Close()
+	defer session.unsubscribeFromMailboxUpdates() // Ensure unsubscription on connection close
 
 	// 1. Greeting
 	session.conn.Write([]byte(fmt.Sprintf("* OK [%s] IMAP4rev1 Service Ready\r\n", session.getCapabilities())))
@@ -256,16 +257,26 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 				continue
 			}
 			mailboxName := strings.Trim(args[0], "\"")
+
+			// If a mailbox was previously selected, unsubscribe from its updates
+			if session.selectedMailbox != nil {
+				session.unsubscribeFromMailboxUpdates()
+			}
+
 			mailbox, err := db.Q.GetMailboxByNameForUser(context.Background(), db.GetMailboxByNameForUserParams{
 				UserID: session.authenticatedUserID,
 				Name:   mailboxName,
 			})
 			if err != nil {
 				session.conn.Write([]byte(fmt.Sprintf("%s NO Mailbox not found\r\n", tag)))
+				// Clear selected mailbox if not found
+				session.selectedMailbox = nil
 				continue
 			}
 
 			session.selectedMailbox = &mailbox
+			session.subscribeToMailboxUpdates() // Subscribe to updates for the newly selected mailbox
+
 			emails, _ := db.Q.GetEmailsInMailbox(context.Background(), mailbox.ID)
 
 			session.conn.Write([]byte(fmt.Sprintf("* %d EXISTS\r\n", len(emails))))

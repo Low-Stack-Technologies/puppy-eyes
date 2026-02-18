@@ -294,3 +294,17 @@ func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
 	}
 	session.conn.Write([]byte(fmt.Sprintf("%s OK %s\r\n", tag, okMsg)))
 }
+
+// subscribeToMailboxUpdates subscribes the current session to updates for its selected mailbox.
+func (session *imapSession) subscribeToMailboxUpdates() {
+	if session.selectedMailbox != nil {
+		GlobalMailboxUpdateService.Subscribe(session.selectedMailbox.ID, session.updates)
+	}
+}
+
+// unsubscribeFromMailboxUpdates unsubscribes the current session from updates for its previously selected mailbox.
+func (session *imapSession) unsubscribeFromMailboxUpdates() {
+	if session.selectedMailbox != nil {
+		GlobalMailboxUpdateService.Unsubscribe(session.selectedMailbox.ID, session.updates)
+	}
+}

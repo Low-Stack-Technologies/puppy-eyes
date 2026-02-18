@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/low-stack-technologies/puppy-eyes/internal/db"
+	"github.com/low-stack-technologies/puppy-eyes/internal/imap"
 )
 
 // ReceiveEmail processes an incoming email from another server.
@@ -51,6 +52,9 @@ func ReceiveEmail(ctx context.Context, sender string, recipients []string, body 
 		if err != nil {
 			return fmt.Errorf("failed to associate email with inbox mailbox: %w", err)
 		}
+
+		// Notify IMAP sessions about the new email
+		imap.GlobalMailboxUpdateService.Publish(inboxMailbox.ID)
 	}
 
 	return nil
