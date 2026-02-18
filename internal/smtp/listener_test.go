@@ -95,7 +95,7 @@ func TestHandleSMTPConnection_EHLO(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 
@@ -145,7 +145,7 @@ func TestHandleSMTPConnection_UnauthenticatedMailRejected(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 
@@ -167,7 +167,7 @@ func TestHandleSMTPConnection_MTARelayProtection(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA)
+	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA, false)
 
 	reader := bufio.NewReader(client)
 
@@ -211,7 +211,7 @@ func TestHandleSMTPConnection_Quit(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -229,7 +229,7 @@ func TestHandleSMTPConnection_InvalidCommand(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -248,7 +248,7 @@ func TestHandleSMTPConnection_STARTTLS_MissingCerts(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -258,7 +258,7 @@ func TestHandleSMTPConnection_STARTTLS_MissingCerts(t *testing.T) {
 	if !strings.Contains(line, "220 Ready to start TLS") {
 		t.Errorf("Expected 220 Ready to start TLS, got %s", line)
 	}
-	
+
 	// Subsequent read should fail because the server goroutine exits upon cert load failure.
 	_, err := reader.ReadString('\n')
 	if err == nil {
@@ -274,7 +274,7 @@ func TestHandleSMTPConnection_DATA(t *testing.T) {
 	defer server.Close()
 
 	// Use MTA mode to bypass authentication requirement for this protocol test.
-	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA)
+	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -316,7 +316,7 @@ func TestHandleSMTPConnection_AUTH_PLAIN_Invalid(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -344,7 +344,7 @@ func TestHandleSMTPConnection_AUTH_LOGIN_Invalid(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -385,7 +385,7 @@ func TestHandleSMTPConnection_SequenceError(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA)
+	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -405,7 +405,7 @@ func TestHandleSMTPConnection_MultipleRecipients(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA)
+	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -429,7 +429,7 @@ func TestHandleSMTPConnection_DotUnstuffing(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA)
+	go handleSMTPConnection(server, SERVER_TO_SERVER_MTA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -457,7 +457,7 @@ func TestHandleSMTPConnection_MAIL_Malformed(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
@@ -477,7 +477,7 @@ func TestHandleSMTPConnection_AuthenticatedMailOwnership(t *testing.T) {
 	defer client.Close()
 	defer server.Close()
 
-	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA)
+	go handleSMTPConnection(server, CLIENT_TO_SERVER_MSA, false)
 
 	reader := bufio.NewReader(client)
 	reader.ReadString('\n') // Greeting
