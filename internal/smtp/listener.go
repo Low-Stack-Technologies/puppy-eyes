@@ -31,10 +31,9 @@ const CLIENT_TO_SERVER_MSA_PORT = 587
 const CLIENT_TO_SERVER_LEGACY_PORT = 465
 const SERVER_IDENTITY = "smtp.puppy-eyes.test"
 
-func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE) {
+func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, isTLS bool) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	isTLS := false
 	var authenticatedUserID pgtype.UUID
 	var envelopeFrom string
 	var envelopeTo []string
@@ -372,7 +371,8 @@ func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_T
 	}
 
 	defer listener.Close()
-	log.Printf("SMTP server listening on port %d", port)
+	isImplicitTLS := (port == CLIENT_TO_SERVER_LEGACY_PORT)
+	log.Printf("SMTP server listening on port %d (Implicit TLS: %v)", port, isImplicitTLS)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -380,7 +380,27 @@ func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_T
 			continue
 		}
 		log.Printf("SMTP server received connection from %s", conn.RemoteAddr())
-		go handleSMTPConnection(conn, connectionType)
+
+		go func(c net.Conn) {
+			if isImplicitTLS {
+				cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+				if err != nil {
+					log.Printf("Failed to load key pair for implicit TLS: %v", err)
+					c.Close()
+					return
+				}
+
+				tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+				tlsConn := tls.Server(c, tlsConfig)
+				if err := tlsConn.Handshake(); err != nil {
+					log.Printf("Implicit TLS handshake failed: %v", err)
+					c.Close()
+					return
+				}
+				c = tlsConn
+			}
+			handleSMTPConnection(c, connectionType, isImplicitTLS)
+		}(conn)
 	}
 }
 
