@@ -39,7 +39,7 @@
 
 ### DMARC (RFC 7489)
 - [x] **Alignment Checks**: Implement logic to verify that the domain in the `From:` header is in "alignment" with the domain validated by SPF or DKIM. This is the core of DMARC and prevents "friendly-from" spoofing where the envelope sender is valid but the visible sender is not.
-- [ ] **Organizational Domain Fallback**: If a DMARC record is not found for a subdomain, the implementation must look up the record for the organizational (root) domain. This ensures that policies applied to a top-level domain correctly protect its subdomains.
+- [x] **Organizational Domain Fallback**: If a DMARC record is not found for a subdomain, the implementation must look up the record for the organizational (root) domain. This ensures that policies applied to a top-level domain correctly protect its subdomains.
 - [x] **Tag Support**: Support additional tags such as `pct` for graduated rollouts, `sp` for subdomain-specific policies, and `adkim`/`aspf` for strict vs. relaxed alignment modes. These tags allow domain owners to fine-tune how their policy is applied.
 - [ ] **Reporting**: Add the ability to generate and send Aggregate (RUA) and Forensic/Failure (RUF) reports as specified in the DMARC record. These reports provide domain owners with visibility into who is sending mail on their behalf.
 

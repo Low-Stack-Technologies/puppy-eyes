@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-msgauth/dkim"
+	"golang.org/x/net/publicsuffix"
 )
 
 // SPFResult represents the result of an SPF check as defined in RFC 7208.
@@ -615,7 +616,6 @@ func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string,
 		return false, "none", nil
 	}
 
-	txts, err := LookupTXTFunc("_dmarc." + headerFromDomain)
 	policy := dmarcPolicy{
 		p:     "none",
 		sp:    "",
@@ -623,21 +623,46 @@ func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string,
 		aspf:  "r",
 		pct:   100,
 	}
-	if err != nil {
+	orgDomain := ""
+	usedOrg := false
+	txts, err := LookupTXTFunc("_dmarc." + headerFromDomain)
+	found := false
+	if err == nil {
+		parsedPolicy, parsedFound := parseDMARCRecord(txts)
+		if parsedFound {
+			policy = parsedPolicy
+			found = true
+		}
+	}
+
+	if err != nil || !found {
+		orgDomain, _ = organizationalDomain(headerFromDomain)
+		if orgDomain != "" && orgDomain != headerFromDomain {
+			orgTxts, orgErr := LookupTXTFunc("_dmarc." + orgDomain)
+			if orgErr == nil {
+				orgPolicy, orgFound := parseDMARCRecord(orgTxts)
+				if orgFound {
+					policy = orgPolicy
+					found = true
+					usedOrg = true
+				}
+			}
+		}
+	}
+
+	if !found {
 		log.Printf("[DMARC] No record found for _dmarc.%s. Returning aligned auth result.", headerFromDomain)
 		spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
 		return spfAligned || dkimAligned, "none", nil
-	}
-
-	parsedPolicy, found := parseDMARCRecord(txts)
-	if found {
-		policy = parsedPolicy
 	}
 
 	spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
 	dmarcPass := spfAligned || dkimAligned
 
 	enforcementPolicy := policy.p
+	if usedOrg && isSubdomain(headerFromDomain, orgDomain) && policy.sp != "" {
+		enforcementPolicy = policy.sp
+	}
 	if !dmarcPass && policy.pct < 100 {
 		if !pctSelected(sampleKey, policy.pct) {
 			enforcementPolicy = "none"
@@ -810,4 +835,21 @@ func pctSelected(sampleKey string, pct int) bool {
 	sum := sha256.Sum256([]byte(sampleKey))
 	val := binary.BigEndian.Uint32(sum[:4]) % 100
 	return int(val) < pct
+}
+
+func organizationalDomain(domain string) (string, error) {
+	domain = normalizeDomain(domain)
+	if domain == "" {
+		return "", errors.New("empty domain")
+	}
+	return publicsuffix.EffectiveTLDPlusOne(domain)
+}
+
+func isSubdomain(child, parent string) bool {
+	child = normalizeDomain(child)
+	parent = normalizeDomain(parent)
+	if child == "" || parent == "" || child == parent {
+		return false
+	}
+	return strings.HasSuffix(child, "."+parent)
 }
