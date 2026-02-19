@@ -669,6 +669,7 @@ func TestVerifyDMARC(t *testing.T) {
 		spfResult      SPFResult
 		spfDomain      string
 		dkimDomains    []string
+		sampleKey      string
 		mockRecords    map[string][]string
 		mockErr        error
 		expectedPass   bool
@@ -680,6 +681,7 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFPass,
 			spfDomain:      "example.com",
 			dkimDomains:    nil,
+			sampleKey:      "a",
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass:   true,
 			expectedPolicy: "reject",
@@ -690,6 +692,7 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFPass,
 			spfDomain:      "mailer.example.net",
 			dkimDomains:    nil,
+			sampleKey:      "b",
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass:   false,
 			expectedPolicy: "reject",
@@ -700,6 +703,7 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFFail,
 			spfDomain:      "example.com",
 			dkimDomains:    []string{"example.com"},
+			sampleKey:      "c",
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass:   true,
 			expectedPolicy: "reject",
@@ -710,6 +714,7 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFFail,
 			spfDomain:      "example.com",
 			dkimDomains:    []string{"mailer.example.net"},
+			sampleKey:      "d",
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
 			expectedPass:   false,
 			expectedPolicy: "quarantine",
@@ -720,6 +725,7 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFPass,
 			spfDomain:      "mailer.example.net",
 			dkimDomains:    nil,
+			sampleKey:      "e",
 			mockRecords:    nil, // Simulate no _dmarc TXT record
 			mockErr:        errors.New("host not found"),
 			expectedPass:   false,
@@ -731,9 +737,54 @@ func TestVerifyDMARC(t *testing.T) {
 			spfResult:      SPFPass,
 			spfDomain:      "example.com",
 			dkimDomains:    nil,
+			sampleKey:      "f",
 			mockRecords:    nil, // Simulate no _dmarc TXT record
 			mockErr:        errors.New("host not found"),
 			expectedPass:   true,
+			expectedPolicy: "none",
+		},
+		{
+			name:           "Relaxed SPF alignment allows subdomain",
+			headerFrom:     "example.com",
+			spfResult:      SPFPass,
+			spfDomain:      "mailer.example.com",
+			dkimDomains:    nil,
+			sampleKey:      "g",
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; aspf=r"}},
+			expectedPass:   true,
+			expectedPolicy: "reject",
+		},
+		{
+			name:           "Strict SPF alignment rejects subdomain",
+			headerFrom:     "example.com",
+			spfResult:      SPFPass,
+			spfDomain:      "mailer.example.com",
+			dkimDomains:    nil,
+			sampleKey:      "h",
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; aspf=s"}},
+			expectedPass:   false,
+			expectedPolicy: "reject",
+		},
+		{
+			name:           "Strict DKIM alignment rejects subdomain",
+			headerFrom:     "example.com",
+			spfResult:      SPFFail,
+			spfDomain:      "example.com",
+			dkimDomains:    []string{"mailer.example.com"},
+			sampleKey:      "i",
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; adkim=s"}},
+			expectedPass:   false,
+			expectedPolicy: "reject",
+		},
+		{
+			name:           "pct=0 disables enforcement",
+			headerFrom:     "example.com",
+			spfResult:      SPFFail,
+			spfDomain:      "example.com",
+			dkimDomains:    nil,
+			sampleKey:      "j",
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; pct=0"}},
+			expectedPass:   false,
 			expectedPolicy: "none",
 		},
 	}
@@ -743,7 +794,7 @@ func TestVerifyDMARC(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, policy, err := VerifyDMARC(tt.headerFrom, tt.spfResult, tt.spfDomain, tt.dkimDomains)
+			pass, policy, err := VerifyDMARC(tt.headerFrom, tt.spfResult, tt.spfDomain, tt.dkimDomains, tt.sampleKey)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifyDMARC() unexpected error = %v", err)

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/mail"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -336,11 +337,13 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				}
 				fromDomain := fromAddr[idx+1:]
 				headerFromDomain, headerFromOK := parseHeaderFromDomain(body.String())
+				messageID := getHeaderValue(body.String(), "Message-ID")
 				dkimPass, dkimDomains, _ := dns.VerifyDKIM(body.String())
 				var dmarcPass bool
 				var policy string
 				if headerFromOK {
-					dmarcPass, policy, _ = dns.VerifyDMARC(headerFromDomain, spfResult, fromDomain, dkimDomains)
+					sampleKey := buildDMARCSampleKey(messageID, headerFromDomain, fromDomain, dkimDomains)
+					dmarcPass, policy, _ = dns.VerifyDMARC(headerFromDomain, spfResult, fromDomain, dkimDomains, sampleKey)
 				} else {
 					dmarcPass = false
 					policy = "none"
@@ -429,6 +432,26 @@ func parseHeaderFromDomain(raw string) (string, bool) {
 		return domain, true
 	}
 	return "", false
+}
+
+func getHeaderValue(raw string, name string) string {
+	msg, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(msg.Header.Get(name))
+}
+
+func buildDMARCSampleKey(messageID, headerFromDomain, spfDomain string, dkimDomains []string) string {
+	if messageID != "" {
+		return messageID
+	}
+	base := headerFromDomain + "|" + spfDomain
+	if len(dkimDomains) == 0 {
+		return base
+	}
+	sort.Strings(dkimDomains)
+	return base + "|" + strings.Join(dkimDomains, ",")
 }
 
 func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_TYPE) {

@@ -1,6 +1,8 @@
 package dns
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -601,50 +603,49 @@ func qualifierToResult(qualifier string) SPFResult {
 	}
 }
 
-// VerifyDMARC performs a DMARC check with strict alignment between header From and SPF/DKIM domains.
-func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string) (bool, string, error) {
+// VerifyDMARC performs a DMARC check with alignment between header From and SPF/DKIM domains.
+func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string, sampleKey string) (bool, string, error) {
 	headerFromDomain = normalizeDomain(headerFromDomain)
 	spfDomain = normalizeDomain(spfDomain)
 
 	log.Printf("[DMARC] Checking domain: %s (SPF Result: %v, SPF Domain: %s, DKIM Domains: %v)", headerFromDomain, spfResult, spfDomain, dkimDomains)
 
-	spfAligned := spfResult == SPFPass && domainsEqualStrict(headerFromDomain, spfDomain)
-	dkimAligned := false
-	for _, dkimDomain := range dkimDomains {
-		if domainsEqualStrict(headerFromDomain, dkimDomain) {
-			dkimAligned = true
-			break
-		}
-	}
-
-	dmarcPass := spfAligned || dkimAligned
-
 	if headerFromDomain == "" {
 		log.Printf("[DMARC] Empty header From domain; DMARC alignment fails.")
-		return dmarcPass, "none", nil
+		return false, "none", nil
 	}
 
 	txts, err := LookupTXTFunc("_dmarc." + headerFromDomain)
+	policy := dmarcPolicy{
+		p:     "none",
+		sp:    "",
+		adkim: "r",
+		aspf:  "r",
+		pct:   100,
+	}
 	if err != nil {
 		log.Printf("[DMARC] No record found for _dmarc.%s. Returning aligned auth result.", headerFromDomain)
-		return dmarcPass, "none", nil
+		spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
+		return spfAligned || dkimAligned, "none", nil
 	}
 
-	policy := "none"
-	for _, txt := range txts {
-		if strings.HasPrefix(txt, "v=DMARC1") {
-			log.Printf("[DMARC] Found record: %s", txt)
-			if strings.Contains(txt, "p=reject") {
-				policy = "reject"
-			} else if strings.Contains(txt, "p=quarantine") {
-				policy = "quarantine"
-			}
-			break
+	parsedPolicy, found := parseDMARCRecord(txts)
+	if found {
+		policy = parsedPolicy
+	}
+
+	spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
+	dmarcPass := spfAligned || dkimAligned
+
+	enforcementPolicy := policy.p
+	if !dmarcPass && policy.pct < 100 {
+		if !pctSelected(sampleKey, policy.pct) {
+			enforcementPolicy = "none"
 		}
 	}
 
-	log.Printf("[DMARC] Policy for %s is %s. SPF Aligned: %v, DKIM Aligned: %v", headerFromDomain, policy, spfAligned, dkimAligned)
-	return dmarcPass, policy, nil
+	log.Printf("[DMARC] Policy for %s is %s. SPF Aligned: %v, DKIM Aligned: %v, pct=%d", headerFromDomain, enforcementPolicy, spfAligned, dkimAligned, policy.pct)
+	return dmarcPass, enforcementPolicy, nil
 }
 
 // LookupMX returns the hostnames of the MX records for the given domain, sorted by preference.
@@ -705,4 +706,108 @@ func normalizeDomain(domain string) string {
 
 func domainsEqualStrict(a, b string) bool {
 	return normalizeDomain(a) == normalizeDomain(b)
+}
+
+type dmarcPolicy struct {
+	p     string
+	sp    string
+	adkim string
+	aspf  string
+	pct   int
+}
+
+func parseDMARCRecord(txts []string) (dmarcPolicy, bool) {
+	policy := dmarcPolicy{
+		p:     "none",
+		adkim: "r",
+		aspf:  "r",
+		pct:   100,
+	}
+	for _, txt := range txts {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(txt)), "v=dmarc1") {
+			continue
+		}
+		log.Printf("[DMARC] Found record: %s", txt)
+		parts := strings.Split(txt, ";")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(kv[0]))
+			value := strings.ToLower(strings.TrimSpace(kv[1]))
+			switch key {
+			case "p":
+				if value == "none" || value == "quarantine" || value == "reject" {
+					policy.p = value
+				}
+			case "sp":
+				if value == "none" || value == "quarantine" || value == "reject" {
+					policy.sp = value
+				}
+			case "adkim":
+				if value == "r" || value == "s" {
+					policy.adkim = value
+				}
+			case "aspf":
+				if value == "r" || value == "s" {
+					policy.aspf = value
+				}
+			case "pct":
+				if pct, err := strconv.Atoi(value); err == nil {
+					if pct < 0 {
+						pct = 0
+					} else if pct > 100 {
+						pct = 100
+					}
+					policy.pct = pct
+				}
+			}
+		}
+		return policy, true
+	}
+	return policy, false
+}
+
+func dmarcAlignment(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string, policy dmarcPolicy) (bool, bool) {
+	spfAligned := spfResult == SPFPass && domainsAlign(policy.aspf, headerFromDomain, spfDomain)
+	dkimAligned := false
+	for _, dkimDomain := range dkimDomains {
+		if domainsAlign(policy.adkim, headerFromDomain, dkimDomain) {
+			dkimAligned = true
+			break
+		}
+	}
+	return spfAligned, dkimAligned
+}
+
+func domainsAlign(mode, headerFrom, identity string) bool {
+	headerFrom = normalizeDomain(headerFrom)
+	identity = normalizeDomain(identity)
+	if headerFrom == "" || identity == "" {
+		return false
+	}
+	if mode == "s" {
+		return headerFrom == identity
+	}
+	if headerFrom == identity {
+		return true
+	}
+	return strings.HasSuffix(identity, "."+headerFrom)
+}
+
+func pctSelected(sampleKey string, pct int) bool {
+	if pct >= 100 {
+		return true
+	}
+	if pct <= 0 {
+		return false
+	}
+	sum := sha256.Sum256([]byte(sampleKey))
+	val := binary.BigEndian.Uint32(sum[:4]) % 100
+	return int(val) < pct
 }
