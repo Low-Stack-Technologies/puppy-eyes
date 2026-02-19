@@ -1,2 +1,6 @@
 tmp
 certs
+web/node_modules
+web/dist
+.env*
+!.env.example

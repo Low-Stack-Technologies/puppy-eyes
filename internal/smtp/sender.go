@@ -60,7 +60,7 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 		EmailID:   emailID,
 		MailboxID: sentMailbox.ID,
 		Flags:     []string{"\\Seen"},
-		Uid:       uid,
+		Uid:       int64(uid),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to associate email with sent mailbox: %w", err)

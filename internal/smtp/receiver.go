@@ -53,7 +53,7 @@ func ReceiveEmail(ctx context.Context, sender string, recipients []string, body 
 			EmailID:   emailID,
 			MailboxID: inboxMailbox.ID,
 			Flags:     []string{"\\Recent"},
-			Uid:       uid,
+			Uid:       int64(uid),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to associate email with inbox mailbox: %w", err)
