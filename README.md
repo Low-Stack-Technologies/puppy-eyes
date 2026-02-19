@@ -16,6 +16,13 @@ The server supports STARTTLS and implicit TLS for SMTP and IMAP. Configure the c
 - SMTP `465`: implicit TLS.
 - IMAP `143`: STARTTLS.
 - IMAP `993`: implicit TLS.
+- HTTPS `443`: web UI + API + websocket over TLS.
+- HTTP `80`: redirects to HTTPS.
+
+Web listener overrides:
+
+- `HTTPS_ADDR`: HTTPS bind address (default: `:443`). If unset, `HTTP_ADDR` is used for backward compatibility.
+- `HTTP_REDIRECT_ADDR`: HTTP redirect bind address (default: `:80`).
 
 ### Get a certificate with certbot (DNS-01)
 

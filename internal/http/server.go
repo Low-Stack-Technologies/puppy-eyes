@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,9 +26,12 @@ import (
 )
 
 const (
-	defaultHTTPAddr   = ":8080"
-	sessionCookieName = "pe_session"
-	sessionTTL        = 24 * time.Hour
+	defaultHTTPSAddr        = ":443"
+	defaultHTTPRedirectAddr = ":80"
+	defaultTLSCertPath      = "certs/tls/server.crt"
+	defaultTLSKeyPath       = "certs/tls/server.key"
+	sessionCookieName       = "pe_session"
+	sessionTTL              = 24 * time.Hour
 )
 
 type principalKey struct{}
@@ -50,14 +54,31 @@ func StartListening(wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	srv := NewServer()
-	addr := strings.TrimSpace(os.Getenv("HTTP_ADDR"))
-	if addr == "" {
-		addr = defaultHTTPAddr
+	httpsAddr := strings.TrimSpace(os.Getenv("HTTPS_ADDR"))
+	if httpsAddr == "" {
+		httpsAddr = strings.TrimSpace(os.Getenv("HTTP_ADDR"))
+	}
+	if httpsAddr == "" {
+		httpsAddr = defaultHTTPSAddr
 	}
 
-	httpServer := &http.Server{
-		Addr:              addr,
+	httpRedirectAddr := strings.TrimSpace(os.Getenv("HTTP_REDIRECT_ADDR"))
+	if httpRedirectAddr == "" {
+		httpRedirectAddr = defaultHTTPRedirectAddr
+	}
+
+	httpsServer := &http.Server{
+		Addr:              httpsAddr,
 		Handler:           srv,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	redirectServer := &http.Server{
+		Addr: httpRedirectAddr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			target := "https://" + httpsRedirectHost(r.Host) + r.URL.RequestURI()
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -65,10 +86,32 @@ func StartListening(wg *sync.WaitGroup) {
 		log.Printf("bootstrap admin setup failed: %v", err)
 	}
 
-	log.Printf("HTTP server listening on %s", addr)
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("HTTP server failed: %v", err)
+	go func() {
+		log.Printf("HTTP redirect server listening on %s", httpRedirectAddr)
+		if err := redirectServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("HTTP redirect server failed: %v", err)
+		}
+	}()
+
+	log.Printf("HTTPS server listening on %s", httpsAddr)
+	if err := httpsServer.ListenAndServeTLS(tlsCertPath(), tlsKeyPath()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("HTTPS server failed: %v", err)
 	}
+}
+
+func httpsRedirectHost(host string) string {
+	if host == "" {
+		return host
+	}
+
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		if p == "80" {
+			return h
+		}
+		return host
+	}
+
+	return strings.TrimSuffix(host, ":80")
 }
 
 func NewServer() *Server {
@@ -140,6 +183,20 @@ func (s *Server) mountStatic() {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+func tlsCertPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_CERT_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSCertPath
+}
+
+func tlsKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_KEY_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSKeyPath
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
