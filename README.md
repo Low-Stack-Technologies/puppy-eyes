@@ -33,11 +33,19 @@ Example with the default selector:
 default._domainkey.example.com
 ```
 
+The selector comes from `DKIM_SELECTOR`. If you don’t set it, the server uses `default`. The domain part is the sender’s domain (the part after `@` in the envelope sender).
+
 The TXT value should include your public key (without PEM headers/footers and without whitespace):
 
 ```
 v=DKIM1; k=rsa; p=<BASE64_PUBLIC_KEY>
 ```
+
+DNS record example:
+
+| Type | Name                           | TTL  | Content                                      |
+|------|--------------------------------|------|----------------------------------------------|
+| TXT  | default._domainkey.example.com | 3600 | v=DKIM1; k=rsa; p=&lt;BASE64_PUBLIC_KEY&gt; |
 
 To extract the base64 public key:
 

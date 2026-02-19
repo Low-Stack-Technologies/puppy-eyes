@@ -30,7 +30,7 @@ INSERT INTO emails (
 ) RETURNING id;
 
 -- name: AssociateEmailToMailbox :exec
-INSERT INTO email_mailbox (email_id, mailbox_id, flags) VALUES ($1, $2, $3);
+INSERT INTO email_mailbox (email_id, mailbox_id, flags, uid) VALUES ($1, $2, $3, $4);
 
 -- name: GetMailboxOfTypeForAddress :one
 SELECT id, name, type, parent_id, address_id, created_at

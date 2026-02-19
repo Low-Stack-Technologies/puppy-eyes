@@ -210,10 +210,10 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 				statusItems = append(statusItems, "RECENT 0")
 			}
 			if strings.Contains(itemsStr, "UIDNEXT") {
-				statusItems = append(statusItems, fmt.Sprintf("UIDNEXT %d", len(emails)+1))
+				statusItems = append(statusItems, fmt.Sprintf("UIDNEXT %d", mailbox.UidNext))
 			}
 			if strings.Contains(itemsStr, "UIDVALIDITY") {
-				statusItems = append(statusItems, "UIDVALIDITY 1")
+				statusItems = append(statusItems, fmt.Sprintf("UIDVALIDITY %d", mailbox.UidValidity))
 			}
 			if strings.Contains(itemsStr, "UNSEEN") {
 				statusItems = append(statusItems, "UNSEEN 0")
@@ -284,7 +284,9 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 
 			session.conn.Write([]byte(fmt.Sprintf("* %d EXISTS\r\n", len(emails))))
 			session.conn.Write([]byte("* 0 RECENT\r\n"))
-			session.conn.Write([]byte("* OK [UIDVALIDITY 1] UIDs valid\r\n"))
+			session.conn.Write([]byte(fmt.Sprintf("* OK [UIDVALIDITY %d] UIDs valid\r\n", mailbox.UidValidity)))
+			session.conn.Write([]byte(fmt.Sprintf("* OK [UIDNEXT %d] Predicted next UID\r\n", mailbox.UidNext)))
+			session.conn.Write([]byte("* OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Permanent flags\r\n"))
 			session.conn.Write([]byte("* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n"))
 			session.conn.Write([]byte(fmt.Sprintf("%s OK [READ-WRITE] Select completed\r\n", tag)))
 
@@ -317,7 +319,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 			session.handleStore(tag, false, args)
 
 		case "EXPUNGE":
-			session.conn.Write([]byte(fmt.Sprintf("%s OK Expunge completed\r\n", tag)))
+			session.handleExpunge(tag)
 
 		case "ID":
 			// RFC 2971 ID command

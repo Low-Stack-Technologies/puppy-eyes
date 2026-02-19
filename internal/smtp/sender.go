@@ -51,10 +51,16 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 	}
 
 	// 4. Add the email to the sent mailbox
+	uid, err := db.Q.AllocateMailboxUID(ctx, sentMailbox.ID)
+	if err != nil {
+		return fmt.Errorf("failed to allocate mailbox uid: %w", err)
+	}
+
 	err = db.Q.AssociateEmailToMailbox(ctx, db.AssociateEmailToMailboxParams{
 		EmailID:   emailID,
 		MailboxID: sentMailbox.ID,
 		Flags:     []string{"\\Seen"},
+		Uid:       uid,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to associate email with sent mailbox: %w", err)

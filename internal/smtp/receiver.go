@@ -44,10 +44,16 @@ func ReceiveEmail(ctx context.Context, sender string, recipients []string, body 
 		}
 
 		// 4. Add the email to the inbox mailbox
+		uid, err := db.Q.AllocateMailboxUID(ctx, inboxMailbox.ID)
+		if err != nil {
+			return fmt.Errorf("failed to allocate mailbox uid: %w", err)
+		}
+
 		err = db.Q.AssociateEmailToMailbox(ctx, db.AssociateEmailToMailboxParams{
 			EmailID:   emailID,
 			MailboxID: inboxMailbox.ID,
 			Flags:     []string{"\\Recent"},
+			Uid:       uid,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to associate email with inbox mailbox: %w", err)

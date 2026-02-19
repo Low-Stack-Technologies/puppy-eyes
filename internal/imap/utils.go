@@ -2,6 +2,8 @@ package imap
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -77,6 +79,109 @@ func formatIMAPAddressList(emails []string) string {
 
 func formatIMAPFlags(flags []string) string {
 	return "(" + strings.Join(flags, " ") + ")"
+}
+
+var systemFlagMap = map[string]string{
+	"\\seen":     "\\Seen",
+	"\\answered": "\\Answered",
+	"\\flagged":  "\\Flagged",
+	"\\deleted":  "\\Deleted",
+	"\\draft":    "\\Draft",
+	"\\recent":   "\\Recent",
+}
+
+func normalizeFlags(flags []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, f := range flags {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		lower := strings.ToLower(f)
+		if canonical, ok := systemFlagMap[lower]; ok {
+			f = canonical
+		}
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func hasFlag(flags []string, flag string) bool {
+	target := strings.ToLower(flag)
+	if canonical, ok := systemFlagMap[target]; ok {
+		target = strings.ToLower(canonical)
+	}
+	for _, f := range flags {
+		if strings.ToLower(f) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func parseSequenceSet(seq string, max int) map[int]bool {
+	set := make(map[int]bool)
+	if max < 1 {
+		return set
+	}
+
+	parts := strings.Split(seq, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if strings.Contains(part, ":") {
+			rangeParts := strings.SplitN(part, ":", 2)
+			if len(rangeParts) != 2 {
+				continue
+			}
+			start, ok := parseSeqNumber(rangeParts[0], max)
+			if !ok {
+				continue
+			}
+			end, ok := parseSeqNumber(rangeParts[1], max)
+			if !ok {
+				continue
+			}
+			if start > end {
+				start, end = end, start
+			}
+			for i := start; i <= end; i++ {
+				set[i] = true
+			}
+			continue
+		}
+
+		val, ok := parseSeqNumber(part, max)
+		if !ok {
+			continue
+		}
+		set[val] = true
+	}
+
+	return set
+}
+
+func parseSeqNumber(part string, max int) (int, bool) {
+	part = strings.TrimSpace(part)
+	if part == "*" {
+		return max, max > 0
+	}
+	val, err := strconv.Atoi(part)
+	if err != nil || val < 1 {
+		return 0, false
+	}
+	if val > max {
+		return 0, false
+	}
+	return val, true
 }
 
 func getHeader(fullBody, field string) string {

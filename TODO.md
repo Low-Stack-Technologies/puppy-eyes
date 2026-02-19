@@ -12,11 +12,13 @@
   - The current parser treats `UID` as a command, but there is no `case "UID":` handler.
   - *Action*: Implement a handler for `UID` that parses the subsequent command (e.g., `FETCH`, `COPY`, `STORE`) and executes it using UIDs instead of sequence numbers.
 
-- [ ] **Implement `STORE` Command**:
-  - Currently returns "To be implemented". Required for flag updates (read/seen status, deletion).
+- [x] **Implement `STORE` Command**:
+  - Required for flag updates (read/seen status, deletion).
 
-- [ ] **Implement `EXPUNGE` Command**:
-  - Currently returns "To be implemented". Required for permanently removing deleted messages.
+- [x] **Implement `EXPUNGE` Command**:
+  - Required for permanently removing deleted messages.
+
+- [ ] **Implement `APPEND` Command**
 
 ## Response Formatting
 - [x] **Fix `FETCH ENVELOPE` Structure**:

@@ -39,45 +39,29 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 	upperData := strings.ToUpper(data)
 	emails, _ := db.Q.GetEmailsInMailbox(context.Background(), session.selectedMailbox.ID)
 
-	// Simple parser for sequence sets like "1", "1:2", "1:*"
+	maxUID := 0
+	for _, e := range emails {
+		if int(e.Uid) > maxUID {
+			maxUID = int(e.Uid)
+		}
+	}
+
+	maxTarget := len(emails)
+	if isUID {
+		maxTarget = maxUID
+	}
+	targetSet := parseSequenceSet(seqSet, maxTarget)
+
 	for i, e := range emails {
 		msgNum := i + 1
-		uid := msgNum // Mock UID
+		uid := int(e.Uid)
 
 		target := msgNum
 		if isUID {
 			target = uid
 		}
 
-		shouldSend := false
-		if seqSet == "*" || seqSet == "1:*" {
-			shouldSend = true
-		} else if strings.Contains(seqSet, ":") {
-			parts := strings.Split(seqSet, ":")
-			if len(parts) == 2 {
-				start := 0
-				fmt.Sscanf(parts[0], "%d", &start)
-				if parts[1] == "*" {
-					if target >= start {
-						shouldSend = true
-					}
-				} else {
-					end := 0
-					fmt.Sscanf(parts[1], "%d", &end)
-					if target >= start && target <= end {
-						shouldSend = true
-					}
-				}
-			}
-		} else {
-			val := 0
-			fmt.Sscanf(seqSet, "%d", &val)
-			if target == val {
-				shouldSend = true
-			}
-		}
-
-		if !shouldSend {
+		if !targetSet[target] {
 			continue
 		}
 
@@ -91,7 +75,7 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 
 		// FLAGS
 		if strings.Contains(upperData, "FLAGS") || strings.Contains(upperData, "ALL") || strings.Contains(upperData, "FAST") || strings.Contains(upperData, "FULL") {
-			items = append(items, fmt.Sprintf("FLAGS %s", formatIMAPFlags(e.Flags)))
+			items = append(items, fmt.Sprintf("FLAGS %s", formatIMAPFlags(normalizeFlags(e.Flags))))
 		}
 
 		// INTERNALDATE
@@ -167,6 +151,10 @@ func (session *imapSession) sendFetchResponse(tag string, isUID bool, data strin
 }
 
 func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
+	if !session.authenticatedUserID.Valid {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Authenticate first\r\n", tag)))
+		return
+	}
 	if session.selectedMailbox == nil {
 		session.conn.Write([]byte(fmt.Sprintf("%s NO Select a mailbox first\r\n", tag)))
 		return
@@ -182,64 +170,53 @@ func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
 
 	// Parse flags from "( \Seen \Answered )" or " \Seen"
 	flagsPart = strings.Trim(flagsPart, "()")
-	newFlags := strings.Fields(flagsPart)
+	newFlags := normalizeFlags(strings.Fields(flagsPart))
 
 	silent := strings.HasSuffix(item, ".SILENT")
+	item = strings.TrimSuffix(item, ".SILENT")
 	op := "SET"
 	if strings.HasPrefix(item, "+") {
 		op = "ADD"
+		item = strings.TrimPrefix(item, "+")
 	} else if strings.HasPrefix(item, "-") {
 		op = "REMOVE"
+		item = strings.TrimPrefix(item, "-")
+	}
+	if item != "FLAGS" {
+		session.conn.Write([]byte(fmt.Sprintf("%s BAD Unsupported STORE item\r\n", tag)))
+		return
 	}
 
 	emails, _ := db.Q.GetEmailsInMailbox(context.Background(), session.selectedMailbox.ID)
+	maxUID := 0
+	for _, e := range emails {
+		if int(e.Uid) > maxUID {
+			maxUID = int(e.Uid)
+		}
+	}
+	maxTarget := len(emails)
+	if isUID {
+		maxTarget = maxUID
+	}
+	targetSet := parseSequenceSet(seqSet, maxTarget)
 
 	for i, e := range emails {
 		msgNum := i + 1
-		uid := msgNum // Mock UID
+		uid := int(e.Uid)
 
 		target := msgNum
 		if isUID {
 			target = uid
 		}
 
-		// Reuse the logic for sequence sets
-		shouldUpdate := false
-		if seqSet == "*" || seqSet == "1:*" {
-			shouldUpdate = true
-		} else if strings.Contains(seqSet, ":") {
-			parts := strings.Split(seqSet, ":")
-			if len(parts) == 2 {
-				start := 0
-				fmt.Sscanf(parts[0], "%d", &start)
-				if parts[1] == "*" {
-					if target >= start {
-						shouldUpdate = true
-					}
-				} else {
-					end := 0
-					fmt.Sscanf(parts[1], "%d", &end)
-					if target >= start && target <= end {
-						shouldUpdate = true
-					}
-				}
-			}
-		} else {
-			val := 0
-			fmt.Sscanf(seqSet, "%d", &val)
-			if target == val {
-				shouldUpdate = true
-			}
-		}
-
-		if !shouldUpdate {
+		if !targetSet[target] {
 			continue
 		}
 
 		// Calculate updated flags
 		var finalFlags []string
 		currentFlagsMap := make(map[string]bool)
-		for _, f := range e.Flags {
+		for _, f := range normalizeFlags(e.Flags) {
 			currentFlagsMap[f] = true
 		}
 
@@ -262,20 +239,14 @@ func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
 			}
 		}
 
+		finalFlags = normalizeFlags(finalFlags)
+
 		// Update Database
 		db.Q.UpdateEmailFlags(context.Background(), db.UpdateEmailFlagsParams{
 			EmailID:   e.ID,
 			MailboxID: session.selectedMailbox.ID,
 			Flags:     finalFlags,
 		})
-
-		// Signal an update for IDLE sessions
-		select {
-		case session.updates <- struct{}{}:
-		default:
-			// Non-blocking send, if the channel is full,
-			// it means an update is already pending.
-		}
 
 		// Send untagged response if not silent
 		if !silent {
@@ -288,11 +259,65 @@ func (session *imapSession) handleStore(tag string, isUID bool, args []string) {
 		}
 	}
 
+	GlobalMailboxUpdateService.Publish(session.selectedMailbox.ID)
+
 	okMsg := "Store completed"
 	if isUID {
 		okMsg = "UID Store completed"
 	}
 	session.conn.Write([]byte(fmt.Sprintf("%s OK %s\r\n", tag, okMsg)))
+}
+
+func (session *imapSession) handleExpunge(tag string) {
+	if !session.authenticatedUserID.Valid {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Authenticate first\r\n", tag)))
+		return
+	}
+	if session.selectedMailbox == nil {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Select a mailbox first\r\n", tag)))
+		return
+	}
+
+	emails, err := db.Q.GetEmailsInMailbox(context.Background(), session.selectedMailbox.ID)
+	if err != nil {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Failed to expunge mailbox\r\n", tag)))
+		return
+	}
+
+	type expungeItem struct {
+		seq     int
+		emailID pgtype.UUID
+	}
+	var expungeList []expungeItem
+	for i, e := range emails {
+		if hasFlag(e.Flags, "\\Deleted") {
+			expungeList = append(expungeList, expungeItem{
+				seq:     i + 1,
+				emailID: e.ID,
+			})
+		}
+	}
+
+	for i := len(expungeList) - 1; i >= 0; i-- {
+		item := expungeList[i]
+		err := db.Q.DeleteEmailFromMailbox(context.Background(), db.DeleteEmailFromMailboxParams{
+			EmailID:   item.emailID,
+			MailboxID: session.selectedMailbox.ID,
+		})
+		if err != nil {
+			session.conn.Write([]byte(fmt.Sprintf("%s NO Failed to expunge mailbox\r\n", tag)))
+			return
+		}
+		session.conn.Write([]byte(fmt.Sprintf("* %d EXPUNGE\r\n", item.seq)))
+	}
+
+	if err := db.Q.DeleteOrphanEmails(context.Background()); err != nil {
+		session.conn.Write([]byte(fmt.Sprintf("%s NO Failed to prune mailbox\r\n", tag)))
+		return
+	}
+
+	GlobalMailboxUpdateService.Publish(session.selectedMailbox.ID)
+	session.conn.Write([]byte(fmt.Sprintf("%s OK Expunge completed\r\n", tag)))
 }
 
 // subscribeToMailboxUpdates subscribes the current session to updates for its selected mailbox.

@@ -34,6 +34,8 @@
     * Server: `* 1 RECENT` (New since last connect)
     * Server: `* OK [UNSEEN 12] Message 12 is first unseen`
     * Server: `* OK [UIDVALIDITY 3857529045] UIDs valid`
+    * Server: `* OK [UIDNEXT 173] Predicted next UID`
+    * Server: `* OK [PERMANENTFLAGS (\Answered \Flagged \Deleted \Seen \Draft \*)] Permanent flags`
     * Server: `* FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`
     * Server: `A005 OK [READ-WRITE] Select completed`
 
