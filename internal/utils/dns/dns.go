@@ -45,7 +45,8 @@ func VerifySPF(ip, domain string, ctx SPFMacroContext) (SPFResult, error) {
 	if ctx.Now.IsZero() {
 		ctx.Now = time.Now().UTC()
 	}
-	return verifySPFRecursive(ip, domain, ctx, 0)
+	state := &spfEvalState{}
+	return verifySPFRecursive(ip, domain, ctx, 0, state)
 }
 
 var LookupTXTFunc = net.LookupTXT
@@ -67,7 +68,22 @@ type macroContext struct {
 	ptrRaw             string
 }
 
-func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int) (SPFResult, error) {
+const maxDNSMechanisms = 10
+
+type spfEvalState struct {
+	dnsMechanismCount int
+}
+
+func consumeDNSMechanism(state *spfEvalState, domain, mechanism string) bool {
+	state.dnsMechanismCount++
+	if state.dnsMechanismCount > maxDNSMechanisms {
+		log.Printf("[SPF] DNS-interactive mechanism limit exceeded (count: %d) for domain: %s", state.dnsMechanismCount, domain)
+		return false
+	}
+	return true
+}
+
+func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int, state *spfEvalState) (SPFResult, error) {
 	if depth > 10 {
 		log.Printf("[SPF] Max recursion depth reached for domain: %s", domain)
 		return SPFPermError, nil // Limit recursion to avoid infinite loops
@@ -148,6 +164,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				return qualifierToResult(qualifier), nil
 			}
 		} else if mechValue == "a" || strings.HasPrefix(mechValue, "a:") || strings.HasPrefix(mechValue, "a/") {
+			if !consumeDNSMechanism(state, domain, "a") {
+				return SPFPermError, nil
+			}
 			aDomain := domain
 			// Check for explicit domain a:example.com
 			if strings.HasPrefix(mechValue, "a:") {
@@ -173,6 +192,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				}
 			}
 		} else if mechValue == "mx" || strings.HasPrefix(mechValue, "mx:") || strings.HasPrefix(mechValue, "mx/") {
+			if !consumeDNSMechanism(state, domain, "mx") {
+				return SPFPermError, nil
+			}
 			mxDomain := domain
 			if strings.HasPrefix(mechValue, "mx:") {
 				mxDomain = strings.Split(strings.TrimPrefix(mechValue, "mx:"), "/")[0]
@@ -202,6 +224,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				}
 			}
 		} else if mechValue == "ptr" || strings.HasPrefix(mechValue, "ptr:") {
+			if !consumeDNSMechanism(state, domain, "ptr") {
+				return SPFPermError, nil
+			}
 			ptrDomain := domain
 			if strings.HasPrefix(mechValue, "ptr:") {
 				ptrDomain = strings.TrimPrefix(mechValue, "ptr:")
@@ -234,6 +259,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				}
 			}
 		} else if strings.HasPrefix(mechValue, "exists:") {
+			if !consumeDNSMechanism(state, domain, "exists") {
+				return SPFPermError, nil
+			}
 			existsDomain := strings.TrimPrefix(mechValue, "exists:")
 			if strings.Contains(existsDomain, "%") {
 				expanded, err := expandSPFMacros(existsDomain, &ctx)
@@ -249,6 +277,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				return qualifierToResult(qualifier), nil
 			}
 		} else if strings.HasPrefix(mechValue, "include:") {
+			if !consumeDNSMechanism(state, domain, "include") {
+				return SPFPermError, nil
+			}
 			includeDomain := strings.TrimPrefix(mechValue, "include:")
 			if strings.Contains(includeDomain, "%") {
 				expanded, err := expandSPFMacros(includeDomain, &ctx)
@@ -259,7 +290,7 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				includeDomain = expanded
 			}
 			log.Printf("[SPF] Following include to: %s (depth: %d)", includeDomain, depth+1)
-			includeResult, err := verifySPFRecursive(ipStr, includeDomain, spfCtx, depth+1)
+			includeResult, err := verifySPFRecursive(ipStr, includeDomain, spfCtx, depth+1, state)
 			if err != nil {
 				log.Printf("[SPF] Error during include check for %s: %v", includeDomain, err)
 				return SPFTempError, err
@@ -276,6 +307,9 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				return SPFTempError, nil
 			}
 		} else if strings.HasPrefix(mechValue, "redirect=") {
+			if !consumeDNSMechanism(state, domain, "redirect") {
+				return SPFPermError, nil
+			}
 			redirectDomain := strings.TrimPrefix(mechValue, "redirect=")
 			if strings.Contains(redirectDomain, "%") {
 				expanded, err := expandSPFMacros(redirectDomain, &ctx)
@@ -286,7 +320,7 @@ func verifySPFRecursive(ipStr, domain string, spfCtx SPFMacroContext, depth int)
 				redirectDomain = expanded
 			}
 			log.Printf("[SPF] Following redirect to: %s (depth: %d)", redirectDomain, depth+1)
-			redirectResult, err := verifySPFRecursive(ipStr, redirectDomain, spfCtx, depth+1)
+			redirectResult, err := verifySPFRecursive(ipStr, redirectDomain, spfCtx, depth+1, state)
 			if err != nil {
 				return SPFTempError, err
 			}

@@ -610,6 +610,61 @@ func TestVerifySPF_MacroSupport(t *testing.T) {
 	}
 }
 
+func TestVerifySPF_DNSMechanismLimit(t *testing.T) {
+	tests := []struct {
+		name           string
+		ip             string
+		domain         string
+		sender         string
+		mockRecords    map[string][]string
+		expectedResult SPFResult
+	}{
+		{
+			name:   "Limit exceeded in single record with a mechanisms",
+			ip:     "192.168.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
+			mockRecords: map[string][]string{
+				"example.com": {"v=spf1 a a a a a a a a a a a -all"},
+			},
+			expectedResult: SPFPermError,
+		},
+		{
+			name:   "Limit exceeded across include mechanisms",
+			ip:     "192.168.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
+			mockRecords: map[string][]string{
+				"example.com":      {"v=spf1 include:sub1.example.com include:sub2.example.com include:sub3.example.com include:sub4.example.com include:sub5.example.com include:sub6.example.com include:sub7.example.com include:sub8.example.com include:sub9.example.com include:sub10.example.com include:sub11.example.com -all"},
+				"sub1.example.com": {"v=spf1 -all"},
+				"sub2.example.com": {"v=spf1 -all"},
+				"sub3.example.com": {"v=spf1 -all"},
+				"sub4.example.com": {"v=spf1 -all"},
+				"sub5.example.com": {"v=spf1 -all"},
+				"sub6.example.com": {"v=spf1 -all"},
+				"sub7.example.com": {"v=spf1 -all"},
+				"sub8.example.com": {"v=spf1 -all"},
+				"sub9.example.com": {"v=spf1 -all"},
+				"sub10.example.com": {"v=spf1 -all"},
+				"sub11.example.com": {"v=spf1 -all"},
+			},
+			expectedResult: SPFPermError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupMockLookupTXT(t, tt.mockRecords, nil)
+			defer teardownMockLookupTXT()
+
+			result, _ := VerifySPF(tt.ip, tt.domain, SPFMacroContext{Sender: tt.sender})
+			if result != tt.expectedResult {
+				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
+			}
+		})
+	}
+}
+
 func TestExpandSPFMacrosIPv6(t *testing.T) {
 	ctx := macroContext{
 		ipStr:  "2001:0db8::1",
