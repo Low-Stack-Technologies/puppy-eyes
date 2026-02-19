@@ -13,7 +13,7 @@ import (
 // ReceiveEmail processes an incoming email from another server.
 // It assumes that domain and recipient verification has already been performed during RCPT TO.
 // If successful, it stores the email in the database.
-func ReceiveEmail(ctx context.Context, sender string, recipients []string, body string, spfPass, dmarcPass bool) error {
+func ReceiveEmail(ctx context.Context, sender string, recipients []string, body string, spfPass, dkimPass, dmarcPass bool) error {
 	for _, recipient := range recipients {
 		// 1. Find the recipients addresses
 		recipientAddresses, err := db.Q.GetAddressFromEmailAddress(ctx, strings.Trim(recipient, "<>"))
@@ -27,8 +27,8 @@ func ReceiveEmail(ctx context.Context, sender string, recipients []string, body 
 			Recipients: []string{recipient},
 			Body:       body,
 			SpfPass:    pgtype.Bool{Bool: spfPass, Valid: true},
+			DkimPass:   pgtype.Bool{Bool: dkimPass, Valid: true},
 			DmarcPass:  pgtype.Bool{Bool: dmarcPass, Valid: true},
-			DkimPass:   pgtype.Bool{Valid: false}, // Not yet implemented
 		})
 		if err != nil {
 			return fmt.Errorf("failed to save incoming email: %w", err)

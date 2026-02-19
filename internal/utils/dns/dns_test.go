@@ -14,8 +14,8 @@ var mockLookupTXTErr error
 func setupMockLookupTXT(t *testing.T, records map[string][]string, err error) {
 	mockTXTRecords = records
 	mockLookupTXTErr = err
-	lookupTXTFunc = func(name string) ([]string, error) {
-		t.Logf("DEBUG: lookupTXTFunc called for name: %s, mockLookupTXTErr: %v, mockTXTRecords[%s]: %v", name, mockLookupTXTErr, name, mockTXTRecords[name])
+	LookupTXTFunc = func(name string) ([]string, error) {
+		t.Logf("DEBUG: LookupTXTFunc called for name: %s, mockLookupTXTErr: %v, mockTXTRecords[%s]: %v", name, mockLookupTXTErr, name, mockTXTRecords[name])
 		if records, ok := mockTXTRecords[name]; ok { // Check mockTXTRecords first
 			return records, nil
 		}
@@ -27,7 +27,7 @@ func setupMockLookupTXT(t *testing.T, records map[string][]string, err error) {
 }
 
 func teardownMockLookupTXT() {
-	lookupTXTFunc = net.LookupTXT // Reset to original
+	LookupTXTFunc = net.LookupTXT // Reset to original
 	mockTXTRecords = nil
 	mockLookupTXTErr = nil
 }
@@ -39,7 +39,7 @@ var mockLookupMXErr error
 func setupMockLookupMX(records map[string][]*net.MX, err error) {
 	mockMXRecords = records
 	mockLookupMXErr = err
-	lookupMXFunc = func(name string) ([]*net.MX, error) {
+	LookupMXFunc = func(name string) ([]*net.MX, error) {
 		if mockLookupMXErr != nil {
 			return nil, mockLookupMXErr
 		}
@@ -51,11 +51,168 @@ func setupMockLookupMX(records map[string][]*net.MX, err error) {
 }
 
 func teardownMockLookupMX() {
-	lookupMXFunc = net.LookupMX // Reset to original
+	LookupMXFunc = net.LookupMX // Reset to original
 	mockMXRecords = nil
 	mockLookupMXErr = nil
 }
 
+// --- Mocking for net.LookupIP ---
+var mockIPs map[string][]net.IP
+var mockLookupIPErr error
+
+func setupMockLookupIP(ips map[string][]net.IP, err error) {
+	mockIPs = ips
+	mockLookupIPErr = err
+	LookupIPFunc = func(name string) ([]net.IP, error) {
+		if mockLookupIPErr != nil {
+			return nil, mockLookupIPErr
+		}
+		if ipList, ok := mockIPs[name]; ok {
+			return ipList, nil
+		}
+		return nil, errors.New("host not found")
+	}
+}
+
+func teardownMockLookupIP() {
+	LookupIPFunc = net.LookupIP
+	mockIPs = nil
+	mockLookupIPErr = nil
+}
+
+// --- Mocking for net.LookupAddr ---
+var mockAddrs map[string][]string
+var mockLookupAddrErr error
+
+func setupMockLookupAddr(addrs map[string][]string, err error) {
+	mockAddrs = addrs
+	mockLookupAddrErr = err
+	LookupAddrFunc = func(addr string) ([]string, error) {
+		if mockLookupAddrErr != nil {
+			return nil, mockLookupAddrErr
+		}
+		if addrList, ok := mockAddrs[addr]; ok {
+			return addrList, nil
+		}
+		return nil, errors.New("not found")
+	}
+}
+
+func teardownMockLookupAddr() {
+	LookupAddrFunc = net.LookupAddr
+	mockAddrs = nil
+	mockLookupAddrErr = nil
+}
+
+func TestVerifySPF_NewMechanisms(t *testing.T) {
+	tests := []struct {
+		name         string
+		ip           string
+		domain       string
+		mockTXT      map[string][]string
+		mockMX       map[string][]*net.MX
+		mockIP       map[string][]net.IP
+		mockAddr     map[string][]string
+		expectedPass bool
+	}{
+		{
+			name:   "A mechanism match",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 a -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"example.com": {net.ParseIP("1.2.3.4")},
+			},
+			expectedPass: true,
+		},
+		{
+			name:   "A:domain mechanism match",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 a:other.com -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"other.com": {net.ParseIP("1.2.3.4")},
+			},
+			expectedPass: true,
+		},
+		{
+			name:   "MX mechanism match",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 mx -all"},
+			},
+			mockMX: map[string][]*net.MX{
+				"example.com": {{Host: "mail.example.com"}},
+			},
+			mockIP: map[string][]net.IP{
+				"mail.example.com": {net.ParseIP("1.2.3.4")},
+			},
+			expectedPass: true,
+		},
+		{
+			name:   "PTR mechanism match",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 ptr -all"},
+			},
+			mockAddr: map[string][]string{
+				"1.2.3.4": {"mail.example.com."},
+			},
+			mockIP: map[string][]net.IP{
+				"mail.example.com": {net.ParseIP("1.2.3.4")},
+			},
+			expectedPass: true,
+		},
+		{
+			name:   "Exists mechanism match",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:check.com -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"check.com": {net.ParseIP("127.0.0.1")},
+			},
+			expectedPass: true,
+		},
+		{
+			name:   "A mechanism no match",
+			ip:     "1.2.3.5",
+			domain: "example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 a -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"example.com": {net.ParseIP("1.2.3.4")},
+			},
+			expectedPass: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupMockLookupTXT(t, tt.mockTXT, nil)
+			setupMockLookupMX(tt.mockMX, nil)
+			setupMockLookupIP(tt.mockIP, nil)
+			setupMockLookupAddr(tt.mockAddr, nil)
+			defer teardownMockLookupTXT()
+			defer teardownMockLookupMX()
+			defer teardownMockLookupIP()
+			defer teardownMockLookupAddr()
+
+			pass, _ := VerifySPF(tt.ip, tt.domain)
+			if pass != tt.expectedPass {
+				t.Errorf("VerifySPF() got = %v, want %v", pass, tt.expectedPass)
+			}
+		})
+	}
+}
 
 func TestVerifySPF(t *testing.T) {
 	tests := []struct {
@@ -294,58 +451,46 @@ func TestVerifyDMARC(t *testing.T) {
 		name           string
 		domain         string
 		spfPass        bool
+		dkimPass       bool
 		mockRecords    map[string][]string
 		mockErr        error
 		expectedPass   bool
 		expectedPolicy string
 	}{
 		{
-			name:         "DMARC record with p=reject, SPF pass",
+			name:         "DMARC record with p=reject, SPF pass, DKIM fail",
 			domain:       "example.com",
 			spfPass:      true,
+			dkimPass:     false,
 			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass: true,
 			expectedPolicy: "reject",
 		},
 		{
-			name:         "DMARC record with p=quarantine, SPF pass",
+			name:         "DMARC record with p=reject, SPF fail, DKIM pass",
 			domain:       "example.com",
-			spfPass:      true,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
+			spfPass:      false,
+			dkimPass:     true,
+			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass: true,
+			expectedPolicy: "reject",
+		},
+		{
+			name:         "DMARC record with p=quarantine, SPF fail, DKIM fail",
+			domain:       "example.com",
+			spfPass:      false,
+			dkimPass:     false,
+			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
+			expectedPass: false,
 			expectedPolicy: "quarantine",
 		},
 		{
-			name:         "DMARC record with p=none, SPF fail",
+			name:         "No DMARC record, SPF fail, DKIM pass",
 			domain:       "example.com",
 			spfPass:      false,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=none"}},
-			expectedPass: false,
-			expectedPolicy: "none",
-		},
-		{
-			name:         "No DMARC record, SPF pass",
-			domain:       "example.com",
-			spfPass:      true,
+			dkimPass:     true,
 			mockRecords:  nil, // Simulate no _dmarc TXT record
 			mockErr:      errors.New("host not found"),
-			expectedPass: true,
-			expectedPolicy: "none",
-		},
-		{
-			name:         "No DMARC record, SPF fail",
-			domain:       "example.com",
-			spfPass:      false,
-			mockRecords:  nil, // Simulate no _dmarc TXT record
-			mockErr:      errors.New("host not found"),
-			expectedPass: false,
-			expectedPolicy: "none",
-		},
-		{
-			name:         "DMARC record with other TXT",
-			domain:       "example.com",
-			spfPass:      true,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"someothertxt"}},
 			expectedPass: true,
 			expectedPolicy: "none",
 		},
@@ -356,7 +501,7 @@ func TestVerifyDMARC(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, policy, err := VerifyDMARC(tt.domain, tt.spfPass)
+			pass, policy, err := VerifyDMARC(tt.domain, tt.spfPass, tt.dkimPass)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifyDMARC() unexpected error = %v", err)

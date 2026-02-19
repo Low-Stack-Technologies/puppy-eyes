@@ -3,6 +3,7 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/low-stack-technologies/puppy-eyes/internal/db"
+	"github.com/low-stack-technologies/puppy-eyes/internal/utils/dns"
 )
 
 // mockDBTX satisfies the DBTX interface to allow testing without a real database.
@@ -48,32 +50,73 @@ func (r *mockRow) Scan(dest ...interface{}) error {
 		return pgx.ErrNoRows
 	}
 
-	// For IsAddressOwnedByUser
-	if strings.Contains(r.query, "IsAddressOwnedByUser") {
+	// For GetAddressFromEmailAddress
+	if strings.Contains(r.query, "GetAddressFromEmailAddress") {
 		if len(r.args) > 0 {
-			name := r.args[0].(string)
-			owned := dest[0].(*bool)
-			// Mock: only "owned@yourdomain.com" is owned by the user
-			if name == "owned" {
-				*owned = true
-			} else {
-				*owned = false
+			email := r.args[0].(string)
+			if email == "owned@yourdomain.com" || email == "user@yourdomain.com" || email == "user1@yourdomain.com" || email == "user2@yourdomain.com" {
+				// Mock: return a valid address ID
+				id := dest[0].(*pgtype.UUID)
+				id.Bytes = [16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+				id.Valid = true
+				return nil
 			}
-			return nil
 		}
+		return pgx.ErrNoRows
 	}
 
-	// For MTARelayProtection test & others: fail if domain is unknown
+	// For UserHasAccessToAddress
+	if strings.Contains(r.query, "UserHasAccessToAddress") {
+		hasAccess := dest[0].(*bool)
+		*hasAccess = true
+		return nil
+	}
+
+	// For GetDomainByName
 	if strings.Contains(r.query, "GetDomainByName") {
 		if len(r.args) > 0 {
 			domain := r.args[0].(string)
-			// We only want to allow certain domains in our mock for success tests
-			if domain != "yourdomain.com" && domain != "example.com" {
-				return pgx.ErrNoRows
+			if domain == "yourdomain.com" || domain == "example.com" {
+				// We need to fill the Domain struct fields.
+				// Assuming order: ID, Name, CreatedAt, UpdatedAt
+				id := dest[0].(*pgtype.UUID)
+				id.Bytes = [16]byte{2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}
+				id.Valid = true
+				name := dest[1].(*string)
+				*name = domain
+				return nil
 			}
 		}
+		return pgx.ErrNoRows
 	}
-	// For other queries (GetAddressByNameAndDomain, CreateEmail), return success.
+
+	// For GetAddressByNameAndDomain
+	if strings.Contains(r.query, "GetAddressByNameAndDomain") {
+		// Return a mock address
+		id := dest[0].(*pgtype.UUID)
+		id.Bytes = [16]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+		id.Valid = true
+		return nil
+	}
+
+	// For CreateEmail
+	if strings.Contains(r.query, "CreateEmail") {
+		id := dest[0].(*pgtype.UUID)
+		id.Bytes = [16]byte{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}
+		id.Valid = true
+		return nil
+	}
+
+	// For GetMailboxOfTypeForAddress
+	if strings.Contains(r.query, "GetMailboxOfTypeForAddress") {
+		// Assuming Mailbox struct: ID, AddressID, Name, Type, ...
+		id := dest[0].(*pgtype.UUID)
+		id.Bytes = [16]byte{4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4}
+		id.Valid = true
+		return nil
+	}
+
+	// For other queries, return success.
 	return nil
 }
 
@@ -84,6 +127,12 @@ func TestMain(m *testing.M) {
 	// Initialize db.Q with a mock to avoid nil pointer dereference panics
 	// when handleSMTPConnection calls users.Authenticate.
 	db.Q = db.New(&mockDBTX{})
+
+	// Mock DNS lookups to avoid network dependency in tests
+	dns.LookupTXTFunc = func(domain string) ([]string, error) {
+		// Return no records for any domain, which results in SPF neutral/pass
+		return nil, errors.New("host not found")
+	}
 
 	os.Exit(m.Run())
 }

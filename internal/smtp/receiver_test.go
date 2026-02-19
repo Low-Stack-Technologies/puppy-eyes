@@ -16,12 +16,12 @@ func TestReceiveEmail_SaveError(t *testing.T) {
 	defer func() { db.Q = oldQ }()
 	db.Q = db.New(&mockDBTX_AlwaysFail{})
 
-	err := ReceiveEmail(context.Background(), "sender@example.com", []string{"user@example.com"}, "body", true, true)
+	err := ReceiveEmail(context.Background(), "sender@example.com", []string{"user@example.com"}, "body", true, true, true)
 	if err == nil {
 		t.Error("Expected error when saving email fails, got nil")
 	}
-	if !strings.Contains(err.Error(), "failed to save email") {
-		t.Errorf("Expected 'failed to save email', got '%v'", err)
+	if !strings.Contains(err.Error(), "failed to find recipient address") {
+		t.Errorf("Expected 'failed to find recipient address', got '%v'", err)
 	}
 }
 

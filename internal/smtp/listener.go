@@ -313,7 +313,8 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 					continue
 				}
 				fromDomain := fromAddr[idx+1:]
-				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfPass)
+				dkimPass, _ := dns.VerifyDKIM(body.String())
+				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfPass, dkimPass)
 
 				// Reject if DMARC fails and policy is 'reject' or 'quarantine'
 				if !dmarcPass && (policy == "reject" || policy == "quarantine") {
@@ -324,7 +325,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 					continue
 				}
 
-				err := ReceiveEmail(context.Background(), envelopeFrom, envelopeTo, body.String(), spfPass, dmarcPass)
+				err := ReceiveEmail(context.Background(), envelopeFrom, envelopeTo, body.String(), spfPass, dkimPass, dmarcPass)
 				if err != nil {
 					log.Printf("Failed to process incoming email: %v", err)
 					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
