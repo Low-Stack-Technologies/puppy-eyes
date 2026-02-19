@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/low-stack-technologies/puppy-eyes/internal/db"
@@ -38,6 +39,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 	var envelopeFrom string
 	var envelopeTo []string
 	var spfResult dns.SPFResult
+	var heloName string
 
 	// 1. Greeting
 	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SERVER_IDENTITY)))
@@ -58,12 +60,21 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 
 		switch cmd {
 		case "EHLO":
+			if len(parts) > 1 {
+				heloName = parts[1]
+			}
 			conn.Write([]byte(fmt.Sprintf("250-%s\r\n", SERVER_IDENTITY)))
 			if !isTLS {
 				conn.Write([]byte("250-STARTTLS\r\n"))
 			}
 			conn.Write([]byte("250-AUTH LOGIN PLAIN\r\n"))
 			conn.Write([]byte("250 8BITMIME\r\n"))
+
+		case "HELO":
+			if len(parts) > 1 {
+				heloName = parts[1]
+			}
+			conn.Write([]byte(fmt.Sprintf("250 %s\r\n", SERVER_IDENTITY)))
 
 		case "STARTTLS":
 			if isTLS {
@@ -214,7 +225,11 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
 				var err error
-				spfResult, err = dns.VerifySPF(remoteIP, domainPart)
+				spfResult, err = dns.VerifySPF(remoteIP, domainPart, dns.SPFMacroContext{
+					Sender: addr,
+					Helo:   heloName,
+					Now:    time.Now().UTC(),
+				})
 				if err != nil || spfResult == dns.SPFFail || spfResult == dns.SPFPermError {
 					log.Printf("SPF validation failed for domain %s from IP %s, result: %s, error: %v", domainPart, remoteIP, spfResult, err)
 					conn.Write([]byte("550 5.7.1 Sender address rejected: SPF check failed\r\n"))

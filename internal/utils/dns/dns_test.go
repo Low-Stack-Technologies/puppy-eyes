@@ -5,6 +5,7 @@ import (
 	"net"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // --- Mocking for net.LookupTXT ---
@@ -109,6 +110,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 		name           string
 		ip             string
 		domain         string
+		sender         string
 		mockTXT        map[string][]string
 		mockMX         map[string][]*net.MX
 		mockIP         map[string][]net.IP
@@ -119,6 +121,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "A mechanism match",
 			ip:     "1.2.3.4",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 a -all"},
 			},
@@ -131,6 +134,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "A:domain mechanism match",
 			ip:     "1.2.3.4",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 a:other.com -all"},
 			},
@@ -143,6 +147,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "MX mechanism match",
 			ip:     "1.2.3.4",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 mx -all"},
 			},
@@ -158,6 +163,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "PTR mechanism match",
 			ip:     "1.2.3.4",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 ptr -all"},
 			},
@@ -173,6 +179,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "Exists mechanism match",
 			ip:     "1.2.3.4",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 exists:check.com -all"},
 			},
@@ -185,6 +192,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			name:   "A mechanism no match",
 			ip:     "1.2.3.5",
 			domain: "example.com",
+			sender: "sender@example.com",
 			mockTXT: map[string][]string{
 				"example.com": {"v=spf1 a -all"},
 			},
@@ -206,7 +214,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			defer teardownMockLookupIP()
 			defer teardownMockLookupAddr()
 
-			result, _ := VerifySPF(tt.ip, tt.domain)
+			result, _ := VerifySPF(tt.ip, tt.domain, SPFMacroContext{Sender: tt.sender})
 			if result != tt.expectedResult {
 				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
 			}
@@ -219,6 +227,7 @@ func TestVerifySPF(t *testing.T) {
 		name           string
 		ip             string
 		domain         string
+		sender         string
 		mockRecords    map[string][]string
 		mockErr        error
 		expectedResult SPFResult
@@ -227,6 +236,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Exact IPv4 match (implicit +)",
 			ip:             "192.168.1.1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -234,6 +244,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Exact IPv4 match (+ qualifier)",
 			ip:             "192.168.1.1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 +ip4:192.168.1.1 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -241,6 +252,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "IPv4 CIDR match",
 			ip:             "192.168.1.5",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -248,6 +260,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "IPv4 CIDR no match",
 			ip:             "192.168.2.5",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
 			expectedResult: SPFFail,
 		},
@@ -255,6 +268,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Exact IPv6 match",
 			ip:             "2001:0db8::1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::1 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -262,6 +276,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "IPv6 CIDR match",
 			ip:             "2001:0db8::f00d",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -269,6 +284,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "IPv6 CIDR no match",
 			ip:             "2001:0db9::f00d",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
 			expectedResult: SPFFail,
 		},
@@ -276,34 +292,39 @@ func TestVerifySPF(t *testing.T) {
 			name:           "No SPF record, none",
 			ip:             "1.1.1.1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"someothertxtrecord"}},
 			expectedResult: SPFNone,
 		},
 		{
 			name:           "SPF record but no match, -all",
 			ip:             "1.1.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 -all"}},
+			domain:         "example.com",
+			sender:         "sender@example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 -all"}},
 			expectedResult: SPFFail,
 		},
 		{
 			name:           "SPF record but no match, ~all",
 			ip:             "1.1.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ~all"}},
+			domain:         "example.com",
+			sender:         "sender@example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ~all"}},
 			expectedResult: SPFSoftFail,
 		},
 		{
 			name:           "SPF record but no match, ?all",
 			ip:             "1.1.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ?all"}},
+			domain:         "example.com",
+			sender:         "sender@example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ?all"}},
 			expectedResult: SPFNeutral,
 		},
 		{
-			name:         "Include mechanism - pass",
-			ip:           "10.0.0.1",
-			domain:       "example.com",
+			name:   "Include mechanism - pass",
+			ip:     "10.0.0.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
 				"example.com":     {"v=spf1 include:sub.example.com -all"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
@@ -311,9 +332,10 @@ func TestVerifySPF(t *testing.T) {
 			expectedResult: SPFPass,
 		},
 		{
-			name:         "Include mechanism - fail from sub-domain",
-			ip:           "10.0.1.1",
-			domain:       "example.com",
+			name:   "Include mechanism - fail from sub-domain",
+			ip:     "10.0.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
 				"example.com":     {"v=spf1 include:sub.example.com -all"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
@@ -321,9 +343,10 @@ func TestVerifySPF(t *testing.T) {
 			expectedResult: SPFFail,
 		},
 		{
-			name:         "Redirect mechanism - pass",
-			ip:           "10.0.0.1",
-			domain:       "example.com",
+			name:   "Redirect mechanism - pass",
+			ip:     "10.0.0.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
 				"example.com":     {"v=spf1 redirect=sub.example.com"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
@@ -331,9 +354,10 @@ func TestVerifySPF(t *testing.T) {
 			expectedResult: SPFPass,
 		},
 		{
-			name:         "Redirect mechanism - fail from sub-domain",
-			ip:           "10.0.1.1",
-			domain:       "example.com",
+			name:   "Redirect mechanism - fail from sub-domain",
+			ip:     "10.0.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
 				"example.com":     {"v=spf1 redirect=sub.example.com"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
@@ -344,6 +368,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Complex record with multiple mechanisms - match first",
 			ip:             "192.168.1.10",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
 			expectedResult: SPFPass,
 		},
@@ -351,27 +376,30 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Complex record with multiple mechanisms - match second",
 			ip:             "10.0.0.10",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
 			expectedResult: SPFPass,
 		},
 		{
-			name:         "Complex record with include and all",
-			ip:           "172.16.0.5",
-			domain:       "example.com",
+			name:   "Complex record with include and all",
+			ip:     "172.16.0.5",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
-				"example.com":     {"v=spf1 ip4:192.168.1.0/24 include:other.com ~all"},
-				"other.com":       {"v=spf1 ip4:172.16.0.0/16 -all"},
-				"another.com":     {"v=spf1 ip4:1.2.3.4 -all"},
+				"example.com": {"v=spf1 ip4:192.168.1.0/24 include:other.com ~all"},
+				"other.com":   {"v=spf1 ip4:172.16.0.0/16 -all"},
+				"another.com": {"v=spf1 ip4:1.2.3.4 -all"},
 			},
 			expectedResult: SPFPass,
 		},
 		{
-			name:         "Complex record with include, no match, then ~all",
-			ip:           "1.1.1.1",
-			domain:       "example.com",
+			name:   "Complex record with include, no match, then ~all",
+			ip:     "1.1.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
-				"example.com":     {"v=spf1 ip4:192.168.1.0/24 include:other.com ~all"},
-				"other.com":       {"v=spf1 ip4:172.16.0.0/16 -all"},
+				"example.com": {"v=spf1 ip4:192.168.1.0/24 include:other.com ~all"},
+				"other.com":   {"v=spf1 ip4:172.16.0.0/16 -all"},
 			},
 			expectedResult: SPFSoftFail,
 		},
@@ -379,14 +407,16 @@ func TestVerifySPF(t *testing.T) {
 			name:           "DNS lookup error for main domain",
 			ip:             "1.1.1.1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    nil,
 			mockErr:        errors.New("lookup example.com: server failed"),
 			expectedResult: SPFTempError,
 		},
 		{
-			name:         "DNS lookup error for included domain",
-			ip:           "1.1.1.1",
-			domain:       "example.com",
+			name:   "DNS lookup error for included domain",
+			ip:     "1.1.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
 				"example.com": {"v=spf1 include:nonexistent.com -all"},
 			},
@@ -394,20 +424,21 @@ func TestVerifySPF(t *testing.T) {
 			expectedResult: SPFPermError,
 		},
 		{
-			name:         "Max recursion depth reached for include",
-			ip:           "1.1.1.1",
-			domain:       "example.com",
+			name:   "Max recursion depth reached for include",
+			ip:     "1.1.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
 			mockRecords: map[string][]string{
-				"example.com":     {"v=spf1 include:sub1.example.com -all"},
-				"sub1.example.com": {"v=spf1 include:sub2.example.com -all"},
-				"sub2.example.com": {"v=spf1 include:sub3.example.com -all"},
-				"sub3.example.com": {"v=spf1 include:sub4.example.com -all"},
-				"sub4.example.com": {"v=spf1 include:sub5.example.com -all"},
-				"sub5.example.com": {"v=spf1 include:sub6.example.com -all"},
-				"sub6.example.com": {"v=spf1 include:sub7.example.com -all"},
-				"sub7.example.com": {"v=spf1 include:sub8.example.com -all"},
-				"sub8.example.com": {"v=spf1 include:sub9.example.com -all"},
-				"sub9.example.com": {"v=spf1 include:sub10.example.com -all"},
+				"example.com":       {"v=spf1 include:sub1.example.com -all"},
+				"sub1.example.com":  {"v=spf1 include:sub2.example.com -all"},
+				"sub2.example.com":  {"v=spf1 include:sub3.example.com -all"},
+				"sub3.example.com":  {"v=spf1 include:sub4.example.com -all"},
+				"sub4.example.com":  {"v=spf1 include:sub5.example.com -all"},
+				"sub5.example.com":  {"v=spf1 include:sub6.example.com -all"},
+				"sub6.example.com":  {"v=spf1 include:sub7.example.com -all"},
+				"sub7.example.com":  {"v=spf1 include:sub8.example.com -all"},
+				"sub8.example.com":  {"v=spf1 include:sub9.example.com -all"},
+				"sub9.example.com":  {"v=spf1 include:sub10.example.com -all"},
 				"sub10.example.com": {"v=spf1 include:sub11.example.com -all"}, // This will trigger max depth
 				"sub11.example.com": {"v=spf1 ip4:1.1.1.1 -all"},
 			},
@@ -417,6 +448,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Invalid IP provided",
 			ip:             "invalid-ip",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:1.1.1.1 -all"}},
 			expectedResult: SPFPermError,
 		},
@@ -424,6 +456,7 @@ func TestVerifySPF(t *testing.T) {
 			name:           "Multiple SPF records",
 			ip:             "192.168.1.1",
 			domain:         "example.com",
+			sender:         "sender@example.com",
 			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all", "v=spf1 ip4:1.2.3.4 -all"}},
 			expectedResult: SPFPermError,
 		},
@@ -434,7 +467,7 @@ func TestVerifySPF(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			result, err := VerifySPF(tt.ip, tt.domain)
+			result, err := VerifySPF(tt.ip, tt.domain, SPFMacroContext{Sender: tt.sender})
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifySPF() unexpected error = %v", err)
@@ -443,6 +476,189 @@ func TestVerifySPF(t *testing.T) {
 				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
 			}
 		})
+	}
+}
+
+func TestVerifySPF_MacroSupport(t *testing.T) {
+	tests := []struct {
+		name           string
+		ip             string
+		domain         string
+		sender         string
+		helo           string
+		mockTXT        map[string][]string
+		mockIP         map[string][]net.IP
+		mockAddr       map[string][]string
+		expectedResult SPFResult
+	}{
+		{
+			name:   "Include with %{d2} expands to parent domain",
+			ip:     "1.2.3.4",
+			domain: "mail.example.com",
+			sender: "sender@mail.example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"mail.example.com": {"v=spf1 include:%{d2} -all"},
+				"example.com":      {"v=spf1 ip4:1.2.3.4 -all"},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Exists with %{i} expands to IP-based name",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			sender: "sender@example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:%{i}.spf.example.com -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"1.2.3.4.spf.example.com": {net.ParseIP("127.0.0.1")},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Exists with %{d2r} reverses and truncates",
+			ip:     "1.1.1.1",
+			domain: "a.b.example.com",
+			sender: "sender@a.b.example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"a.b.example.com": {"v=spf1 exists:%{d2r}.spf.test -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"com.example.spf.test": {net.ParseIP("127.0.0.1")},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Exists with %{l} and %{o}",
+			ip:     "1.1.1.1",
+			domain: "example.com",
+			sender: "user+tag@example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:%{l}.%{o} -all"},
+			},
+			mockIP: map[string][]net.IP{
+				"user.tag.example.com": {net.ParseIP("127.0.0.1")},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Exists with %{p} validated PTR",
+			ip:     "1.2.3.4",
+			domain: "example.com",
+			sender: "sender@example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:%{p} -all"},
+			},
+			mockAddr: map[string][]string{
+				"1.2.3.4": {"raw.example.com.", "ptr.example.com."},
+			},
+			mockIP: map[string][]net.IP{
+				"ptr.example.com": {net.ParseIP("1.2.3.4")},
+				"raw.example.com": {net.ParseIP("8.8.8.8")},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Exists with %{r} raw PTR",
+			ip:     "1.2.3.5",
+			domain: "example.com",
+			sender: "sender@example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:%{r} -all"},
+			},
+			mockAddr: map[string][]string{
+				"1.2.3.5": {"raw.example.com."},
+			},
+			mockIP: map[string][]net.IP{
+				"raw.example.com": {net.ParseIP("127.0.0.1")},
+			},
+			expectedResult: SPFPass,
+		},
+		{
+			name:   "Unsupported macro yields permerror",
+			ip:     "1.1.1.1",
+			domain: "example.com",
+			sender: "sender@example.com",
+			helo:   "mail.example.com",
+			mockTXT: map[string][]string{
+				"example.com": {"v=spf1 exists:%{x} -all"},
+			},
+			expectedResult: SPFPermError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupMockLookupTXT(t, tt.mockTXT, nil)
+			setupMockLookupIP(tt.mockIP, nil)
+			setupMockLookupAddr(tt.mockAddr, nil)
+			defer teardownMockLookupTXT()
+			defer teardownMockLookupIP()
+			defer teardownMockLookupAddr()
+
+			result, _ := VerifySPF(tt.ip, tt.domain, SPFMacroContext{Sender: tt.sender, Helo: tt.helo})
+			if result != tt.expectedResult {
+				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
+			}
+		})
+	}
+}
+
+func TestExpandSPFMacrosIPv6(t *testing.T) {
+	ctx := macroContext{
+		ipStr:  "2001:0db8::1",
+		ip:     net.ParseIP("2001:0db8::1"),
+		domain: "example.com",
+		sender: "sender@example.com",
+		helo:   "mail.example.com",
+		now:    time.Unix(1700000000, 0).UTC(),
+	}
+
+	got, err := expandSPFMacros("%{i}", &ctx)
+	if err != nil {
+		t.Fatalf("expandSPFMacros() unexpected error: %v", err)
+	}
+
+	want := "2.0.0.1.0.d.b.8.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1"
+	if got != want {
+		t.Fatalf("expandSPFMacros() got = %s, want %s", got, want)
+	}
+}
+
+func TestExpandSPFMacrosExtended(t *testing.T) {
+	setupMockLookupAddr(map[string][]string{
+		"1.2.3.4": {"raw.example.com.", "ptr.example.com."},
+	}, nil)
+	setupMockLookupIP(map[string][]net.IP{
+		"ptr.example.com": {net.ParseIP("1.2.3.4")},
+		"raw.example.com": {net.ParseIP("8.8.8.8")},
+	}, nil)
+	defer teardownMockLookupAddr()
+	defer teardownMockLookupIP()
+
+	ctx := macroContext{
+		ipStr:  "1.2.3.4",
+		ip:     net.ParseIP("1.2.3.4"),
+		domain: "example.com",
+		sender: "user+tag@example.com",
+		helo:   "mail.sender.tld",
+		now:    time.Unix(1700000000, 0).UTC(),
+	}
+
+	got, err := expandSPFMacros("%{l}.%{o}.%{h}.%{p}.%{r}.%{t}.%{v}.%{c}", &ctx)
+	if err != nil {
+		t.Fatalf("expandSPFMacros() unexpected error: %v", err)
+	}
+
+	want := "user.tag.example.com.mail.sender.tld.ptr.example.com.raw.example.com.1700000000.in-addr.1.2.3.4"
+	if got != want {
+		t.Fatalf("expandSPFMacros() got = %s, want %s", got, want)
 	}
 }
 
