@@ -821,6 +821,17 @@ func TestVerifyDMARC(t *testing.T) {
 			expectedPolicy: "quarantine",
 		},
 		{
+			name:           "Org domain fallback uses PSL for com.au",
+			headerFrom:     "mail.example.com.au",
+			spfResult:      SPFFail,
+			spfDomain:      "mail.example.com.au",
+			dkimDomains:    nil,
+			sampleKey:      "p",
+			mockRecords:    map[string][]string{"_dmarc.example.com.au": {"v=DMARC1; p=reject; sp=quarantine"}},
+			expectedPass:   false,
+			expectedPolicy: "quarantine",
+		},
+		{
 			name:           "Org domain fallback uses psl for .com",
 			headerFrom:     "mail.example.com",
 			spfResult:      SPFFail,
