@@ -8,13 +8,26 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 )
 
+// SPFResult represents the result of an SPF check as defined in RFC 7208.
+type SPFResult string
+
+const (
+	SPFPass      SPFResult = "Pass"
+	SPFFail      SPFResult = "Fail"
+	SPFSoftFail  SPFResult = "SoftFail"
+	SPFNeutral   SPFResult = "Neutral"
+	SPFNone      SPFResult = "None"
+	SPFTempError SPFResult = "TempError"
+	SPFPermError SPFResult = "PermError"
+)
+
 // VerifySPF checks if the provided IP is authorized to send mail for the given domain.
 // This is a simplified implementation of SPF validation.
-func VerifySPF(ip, domain string) (bool, error) {
+func VerifySPF(ip, domain string) (SPFResult, error) {
 	log.Printf("[SPF] Starting verification for IP: %s, Domain: %s", ip, domain)
 	if ip == "" {
-		log.Printf("[SPF] Empty IP address provided. Treating as neutral/pass.")
-		return true, nil
+		log.Printf("[SPF] Empty IP address provided. Returning Neutral.")
+		return SPFNeutral, nil
 	}
 	return verifySPFRecursive(ip, domain, 0)
 }
@@ -24,46 +37,55 @@ var LookupMXFunc = net.LookupMX
 var LookupIPFunc = net.LookupIP
 var LookupAddrFunc = net.LookupAddr
 
-func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
+func verifySPFRecursive(ipStr, domain string, depth int) (SPFResult, error) {
 	if depth > 10 {
 		log.Printf("[SPF] Max recursion depth reached for domain: %s", domain)
-		return false, nil // Limit recursion to avoid infinite loops
+		return SPFPermError, nil // Limit recursion to avoid infinite loops
 	}
 
 	incomingIP := net.ParseIP(ipStr)
 	if incomingIP == nil {
 		log.Printf("[SPF] Invalid IP address provided: %s", ipStr)
-		return false, nil
+		return SPFPermError, nil
 	}
 
 	log.Printf("[SPF] Looking up TXT records for: %s (depth: %d)", domain, depth)
 	txts, err := LookupTXTFunc(domain)
 	if err != nil {
 		log.Printf("[SPF] Lookup failed for %s (depth: %d): %v.", domain, depth, err)
-		// If it's a top-level domain and lookup fails, it's neutral/pass.
-		// If it's an include (depth > 0) and lookup fails, it's a fail.
-		if depth == 0 {
-			log.Print("[SPF] Treating top-level domain lookup failure as neutral/pass.")
-			return true, nil // Treat top-level lookup errors as neutral/pass for simplicity
-		} else {
-			log.Print("[SPF] Treating include domain lookup failure as fail.")
-			return false, nil // Treat include lookup errors as fail
+		// RFC 7208: If the DNS lookup returns a server failure (RCODE 2) or some other error condition,
+		// the result is "temperror". If the DNS lookup returns a name error (RCODE 3), the result is "none".
+		// We use a simplified check here.
+		if strings.Contains(err.Error(), "no such host") {
+			return SPFNone, nil
 		}
+		return SPFTempError, err
 	}
 	log.Printf("[SPF] Found TXT records: %v", txts)
 
-	spfRecordFound := false
-
+	var spfRecords []string
 	for _, txt := range txts {
 		if strings.HasPrefix(txt, "v=spf1") {
-			log.Printf("[SPF] Found record: %s", txt)
-			spfRecordFound = true
-			mechanisms := strings.Fields(txt[len("v=spf1"):])
+			spfRecords = append(spfRecords, txt)
+		}
+	}
 
-			var hasAll bool
-			var allQualifier string
+	if len(spfRecords) == 0 {
+		return SPFNone, nil
+	}
+	if len(spfRecords) > 1 {
+		log.Printf("[SPF] Multiple SPF records found for %s", domain)
+		return SPFPermError, nil
+	}
 
-			for _, mechanism := range mechanisms {
+	txt := spfRecords[0]
+	log.Printf("[SPF] Found record: %s", txt)
+	mechanisms := strings.Fields(txt[len("v=spf1"):])
+
+	var hasAll bool
+	var allQualifier string
+
+	for _, mechanism := range mechanisms {
 				qualifier := "+" // Default qualifier is '+'
 				mechValue := mechanism
 
@@ -79,13 +101,13 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 					ipEntry := strings.TrimPrefix(mechValue, "ip4:")
 					if checkIPMechanism(incomingIP, ipEntry, net.IPv4len) {
 						log.Printf("[SPF] IP %s matched ip4 mechanism: %s (Qualifier: %s)", ipStr, mechValue, qualifier)
-						return evaluateQualifier(qualifier), nil
+						return qualifierToResult(qualifier), nil
 					}
 				} else if strings.HasPrefix(mechValue, "ip6:") {
 					ipEntry := strings.TrimPrefix(mechValue, "ip6:")
 					if checkIPMechanism(incomingIP, ipEntry, net.IPv6len) {
 						log.Printf("[SPF] IP %s matched ip6 mechanism: %s (Qualifier: %s)", ipStr, mechValue, qualifier)
-						return evaluateQualifier(qualifier), nil
+						return qualifierToResult(qualifier), nil
 					}
 				} else if mechValue == "a" || strings.HasPrefix(mechValue, "a:") || strings.HasPrefix(mechValue, "a/") {
 					aDomain := domain
@@ -99,7 +121,7 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 						for _, ip := range ips {
 							if ip.Equal(incomingIP) {
 								log.Printf("[SPF] IP %s matched a mechanism: %s", ipStr, mechValue)
-								return evaluateQualifier(qualifier), nil
+								return qualifierToResult(qualifier), nil
 							}
 						}
 					}
@@ -117,7 +139,7 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 								for _, ip := range ips {
 									if ip.Equal(incomingIP) {
 										log.Printf("[SPF] IP %s matched mx mechanism: %s (via %s)", ipStr, mechValue, mx.Host)
-										return evaluateQualifier(qualifier), nil
+										return qualifierToResult(qualifier), nil
 									}
 								}
 							}
@@ -139,7 +161,7 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 									for _, ip := range ips {
 										if ip.Equal(incomingIP) {
 											log.Printf("[SPF] IP %s matched ptr mechanism: %s (via %s)", ipStr, mechValue, name)
-											return evaluateQualifier(qualifier), nil
+											return qualifierToResult(qualifier), nil
 										}
 									}
 								}
@@ -151,25 +173,38 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 					ips, err := LookupIPFunc(existsDomain)
 					if err == nil && len(ips) > 0 {
 						log.Printf("[SPF] IP %s matched exists mechanism: %s", ipStr, mechValue)
-						return evaluateQualifier(qualifier), nil
+						return qualifierToResult(qualifier), nil
 					}
 				} else if strings.HasPrefix(mechValue, "include:") {
 					includeDomain := strings.TrimPrefix(mechValue, "include:")
 					log.Printf("[SPF] Following include to: %s (depth: %d)", includeDomain, depth+1)
-					includePass, err := verifySPFRecursive(ipStr, includeDomain, depth+1)
+					includeResult, err := verifySPFRecursive(ipStr, includeDomain, depth+1)
 					if err != nil {
 						log.Printf("[SPF] Error during include check for %s: %v", includeDomain, err)
-						// Treat include lookup error as a fail
-						return false, nil
+						return SPFTempError, err
 					}
-					if includePass {
+					switch includeResult {
+					case SPFPass:
 						log.Printf("[SPF] Include mechanism for %s passed.", includeDomain)
-						return evaluateQualifier(qualifier), nil
+						return qualifierToResult(qualifier), nil
+					case SPFFail, SPFSoftFail, SPFNeutral:
+						// No match, continue
+					case SPFNone, SPFPermError:
+						return SPFPermError, nil
+					case SPFTempError:
+						return SPFTempError, nil
 					}
 				} else if strings.HasPrefix(mechValue, "redirect=") {
 					redirectDomain := strings.TrimPrefix(mechValue, "redirect=")
 					log.Printf("[SPF] Following redirect to: %s (depth: %d)", redirectDomain, depth+1)
-					return verifySPFRecursive(ipStr, redirectDomain, depth+1)
+					redirectResult, err := verifySPFRecursive(ipStr, redirectDomain, depth+1)
+					if err != nil {
+						return SPFTempError, err
+					}
+					if redirectResult == SPFNone {
+						return SPFPermError, nil
+					}
+					return redirectResult, nil
 				} else if mechValue == "all" {
 					hasAll = true
 					allQualifier = qualifier
@@ -178,15 +213,12 @@ func verifySPFRecursive(ipStr, domain string, depth int) (bool, error) {
 
 			if hasAll {
 				log.Printf("[SPF] No specific mechanism matched. Evaluating all mechanism (Qualifier: %s)", allQualifier)
-				return evaluateQualifier(allQualifier), nil
+				return qualifierToResult(allQualifier), nil
 			}
-		}
-	}
 
-	// If no v=spf1 record was found, or none of them matched, it's neutral (pass).
-	result := true
-	log.Printf("[SPF] Finished for %s. SPF record found: %v, Result (pass): %v", domain, spfRecordFound, result)
-	return result, nil
+	// If no match was found, and no 'all' mechanism, it's Neutral.
+	log.Printf("[SPF] Finished for %s. No match found. Result: %s", domain, SPFNeutral)
+	return SPFNeutral, nil
 }
 
 // checkIPMechanism parses an IP entry (e.g., "192.168.1.1/24" or "192.168.1.1")
@@ -208,22 +240,27 @@ func checkIPMechanism(incomingIP net.IP, ipEntry string, ipLen int) bool {
 	return false
 }
 
-// evaluateQualifier returns true for '+' and '?' qualifiers (pass/neutral), and false for '-' and '~' (fail/softfail).
-func evaluateQualifier(qualifier string) bool {
+// qualifierToResult returns the SPFResult corresponding to the given qualifier.
+func qualifierToResult(qualifier string) SPFResult {
 	switch qualifier {
-	case "-", "~":
-		return false
-	case "+", "?": // Neutral acts as pass for simplified DMARC flow
-		return true
+	case "+":
+		return SPFPass
+	case "-":
+		return SPFFail
+	case "~":
+		return SPFSoftFail
+	case "?":
+		return SPFNeutral
 	default: // Default is '+'
-		return true
+		return SPFPass
 	}
 }
 
 // VerifyDMARC performs a basic DMARC check based on the SPF and DKIM results.
-func VerifyDMARC(domain string, spfPass, dkimPass bool) (bool, string, error) {
-	log.Printf("[DMARC] Checking domain: %s (SPF Pass: %v, DKIM Pass: %v)", domain, spfPass, dkimPass)
+func VerifyDMARC(domain string, spfResult SPFResult, dkimPass bool) (bool, string, error) {
+	log.Printf("[DMARC] Checking domain: %s (SPF Result: %v, DKIM Pass: %v)", domain, spfResult, dkimPass)
 	txts, err := LookupTXTFunc("_dmarc." + domain)
+	spfPass := (spfResult == SPFPass)
 	if err != nil {
 		log.Printf("[DMARC] No record found for _dmarc.%s. Returning combined SPF/DKIM result.", domain)
 		return spfPass || dkimPass, "none", nil // No DMARC record found, return actual auth status

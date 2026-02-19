@@ -35,7 +35,7 @@
 - [x] **Missing Mechanisms**: Implement the `a`, `mx`, `ptr`, and `exists` mechanisms which are currently skipped. These are essential because many domains authorize their own IP addresses via their existing DNS records rather than explicit IP lists.
 - [ ] **Macro Support**: Add support for SPF macros like `%{i}`, `%{d}`, and `%{s}` which allow for dynamic record lookups based on sender attributes. Without this, records containing macros will fail to parse correctly or yield incorrect results.
 - [ ] **RFC-Compliant DNS Limits**: Enforce the strict RFC 7208 limit of 10 DNS-interactive mechanisms per SPF check to prevent Denial of Service attacks. This requires a counter that persists across nested `include` and `redirect` mechanisms.
-- [ ] **Result Granularity**: Expand the return types to distinguish between `Pass`, `Fail`, `SoftFail`, `Neutral`, `None`, `TempError`, and `PermError`. This granularity is necessary for sophisticated spam filtering and proper DMARC evaluation.
+- [x] **Result Granularity**: Expand the return types to distinguish between `Pass`, `Fail`, `SoftFail`, `Neutral`, `None`, `TempError`, and `PermError`. This granularity is necessary for sophisticated spam filtering and proper DMARC evaluation.
 
 ### DMARC (RFC 7489)
 - [ ] **Alignment Checks**: Implement logic to verify that the domain in the `From:` header is in "alignment" with the domain validated by SPF or DKIM. This is the core of DMARC and prevents "friendly-from" spoofing where the envelope sender is valid but the visible sender is not.

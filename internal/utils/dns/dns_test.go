@@ -106,14 +106,14 @@ func teardownMockLookupAddr() {
 
 func TestVerifySPF_NewMechanisms(t *testing.T) {
 	tests := []struct {
-		name         string
-		ip           string
-		domain       string
-		mockTXT      map[string][]string
-		mockMX       map[string][]*net.MX
-		mockIP       map[string][]net.IP
-		mockAddr     map[string][]string
-		expectedPass bool
+		name           string
+		ip             string
+		domain         string
+		mockTXT        map[string][]string
+		mockMX         map[string][]*net.MX
+		mockIP         map[string][]net.IP
+		mockAddr       map[string][]string
+		expectedResult SPFResult
 	}{
 		{
 			name:   "A mechanism match",
@@ -125,7 +125,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"example.com": {net.ParseIP("1.2.3.4")},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:   "A:domain mechanism match",
@@ -137,7 +137,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"other.com": {net.ParseIP("1.2.3.4")},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:   "MX mechanism match",
@@ -152,7 +152,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"mail.example.com": {net.ParseIP("1.2.3.4")},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:   "PTR mechanism match",
@@ -167,7 +167,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"mail.example.com": {net.ParseIP("1.2.3.4")},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:   "Exists mechanism match",
@@ -179,7 +179,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"check.com": {net.ParseIP("127.0.0.1")},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:   "A mechanism no match",
@@ -191,7 +191,7 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			mockIP: map[string][]net.IP{
 				"example.com": {net.ParseIP("1.2.3.4")},
 			},
-			expectedPass: false,
+			expectedResult: SPFFail,
 		},
 	}
 
@@ -206,9 +206,9 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 			defer teardownMockLookupIP()
 			defer teardownMockLookupAddr()
 
-			pass, _ := VerifySPF(tt.ip, tt.domain)
-			if pass != tt.expectedPass {
-				t.Errorf("VerifySPF() got = %v, want %v", pass, tt.expectedPass)
+			result, _ := VerifySPF(tt.ip, tt.domain)
+			if result != tt.expectedResult {
+				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
 			}
 		})
 	}
@@ -216,89 +216,89 @@ func TestVerifySPF_NewMechanisms(t *testing.T) {
 
 func TestVerifySPF(t *testing.T) {
 	tests := []struct {
-		name         string
-		ip           string
-		domain       string
-		mockRecords  map[string][]string
-		mockErr      error
-		expectedPass bool
+		name           string
+		ip             string
+		domain         string
+		mockRecords    map[string][]string
+		mockErr        error
+		expectedResult SPFResult
 	}{
 		{
-			name:         "Exact IPv4 match (implicit +)",
-			ip:           "192.168.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all"}},
-			expectedPass: true,
+			name:           "Exact IPv4 match (implicit +)",
+			ip:             "192.168.1.1",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "Exact IPv4 match (+ qualifier)",
-			ip:           "192.168.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 +ip4:192.168.1.1 -all"}},
-			expectedPass: true,
+			name:           "Exact IPv4 match (+ qualifier)",
+			ip:             "192.168.1.1",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 +ip4:192.168.1.1 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "IPv4 CIDR match",
-			ip:           "192.168.1.5",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
-			expectedPass: true,
+			name:           "IPv4 CIDR match",
+			ip:             "192.168.1.5",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "IPv4 CIDR no match",
-			ip:           "192.168.2.5",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
-			expectedPass: false,
+			name:           "IPv4 CIDR no match",
+			ip:             "192.168.2.5",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 -all"}},
+			expectedResult: SPFFail,
 		},
 		{
-			name:         "Exact IPv6 match",
-			ip:           "2001:0db8::1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::1 -all"}},
-			expectedPass: true,
+			name:           "Exact IPv6 match",
+			ip:             "2001:0db8::1",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::1 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "IPv6 CIDR match",
-			ip:           "2001:0db8::f00d",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
-			expectedPass: true,
+			name:           "IPv6 CIDR match",
+			ip:             "2001:0db8::f00d",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "IPv6 CIDR no match",
-			ip:           "2001:0db9::f00d",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
-			expectedPass: false,
+			name:           "IPv6 CIDR no match",
+			ip:             "2001:0db9::f00d",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip6:2001:0db8::/32 -all"}},
+			expectedResult: SPFFail,
 		},
 		{
-			name:         "No SPF record, neutral",
-			ip:           "1.1.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"someothertxtrecord"}},
-			expectedPass: true,
+			name:           "No SPF record, none",
+			ip:             "1.1.1.1",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"someothertxtrecord"}},
+			expectedResult: SPFNone,
 		},
 		{
-			name:         "SPF record but no match, -all",
-			ip:           "1.1.1.1",
+			name:           "SPF record but no match, -all",
+			ip:             "1.1.1.1",
 			domain:       "example.com",
 			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 -all"}},
-			expectedPass: false,
+			expectedResult: SPFFail,
 		},
 		{
-			name:         "SPF record but no match, ~all",
-			ip:           "1.1.1.1",
+			name:           "SPF record but no match, ~all",
+			ip:             "1.1.1.1",
 			domain:       "example.com",
 			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ~all"}},
-			expectedPass: false, // Softfail treated as fail for DMARC context
+			expectedResult: SPFSoftFail,
 		},
 		{
-			name:         "SPF record but no match, ?all",
-			ip:           "1.1.1.1",
+			name:           "SPF record but no match, ?all",
+			ip:             "1.1.1.1",
 			domain:       "example.com",
 			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:2.2.2.2 ?all"}},
-			expectedPass: true, // Neutral treated as pass for DMARC context
+			expectedResult: SPFNeutral,
 		},
 		{
 			name:         "Include mechanism - pass",
@@ -308,7 +308,7 @@ func TestVerifySPF(t *testing.T) {
 				"example.com":     {"v=spf1 include:sub.example.com -all"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:         "Include mechanism - fail from sub-domain",
@@ -318,7 +318,7 @@ func TestVerifySPF(t *testing.T) {
 				"example.com":     {"v=spf1 include:sub.example.com -all"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
 			},
-			expectedPass: false,
+			expectedResult: SPFFail,
 		},
 		{
 			name:         "Redirect mechanism - pass",
@@ -328,7 +328,7 @@ func TestVerifySPF(t *testing.T) {
 				"example.com":     {"v=spf1 redirect=sub.example.com"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:         "Redirect mechanism - fail from sub-domain",
@@ -338,21 +338,21 @@ func TestVerifySPF(t *testing.T) {
 				"example.com":     {"v=spf1 redirect=sub.example.com"},
 				"sub.example.com": {"v=spf1 ip4:10.0.0.0/24 -all"},
 			},
-			expectedPass: false,
+			expectedResult: SPFFail,
 		},
 		{
-			name:         "Complex record with multiple mechanisms - match first",
-			ip:           "192.168.1.10",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
-			expectedPass: true,
+			name:           "Complex record with multiple mechanisms - match first",
+			ip:             "192.168.1.10",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
-			name:         "Complex record with multiple mechanisms - match second",
-			ip:           "10.0.0.10",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
-			expectedPass: true,
+			name:           "Complex record with multiple mechanisms - match second",
+			ip:             "10.0.0.10",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.0/24 ip4:10.0.0.0/8 -all"}},
+			expectedResult: SPFPass,
 		},
 		{
 			name:         "Complex record with include and all",
@@ -363,7 +363,7 @@ func TestVerifySPF(t *testing.T) {
 				"other.com":       {"v=spf1 ip4:172.16.0.0/16 -all"},
 				"another.com":     {"v=spf1 ip4:1.2.3.4 -all"},
 			},
-			expectedPass: true,
+			expectedResult: SPFPass,
 		},
 		{
 			name:         "Complex record with include, no match, then ~all",
@@ -373,15 +373,15 @@ func TestVerifySPF(t *testing.T) {
 				"example.com":     {"v=spf1 ip4:192.168.1.0/24 include:other.com ~all"},
 				"other.com":       {"v=spf1 ip4:172.16.0.0/16 -all"},
 			},
-			expectedPass: false, // ~all
+			expectedResult: SPFSoftFail,
 		},
 		{
-			name:         "DNS lookup error for main domain",
-			ip:           "1.1.1.1",
-			domain:       "example.com",
-			mockRecords:  nil,
-			mockErr:      errors.New("lookup example.com: server failed"),
-			expectedPass: true, // Treated as neutral/pass on lookup error
+			name:           "DNS lookup error for main domain",
+			ip:             "1.1.1.1",
+			domain:         "example.com",
+			mockRecords:    nil,
+			mockErr:        errors.New("lookup example.com: server failed"),
+			expectedResult: SPFTempError,
 		},
 		{
 			name:         "DNS lookup error for included domain",
@@ -390,8 +390,8 @@ func TestVerifySPF(t *testing.T) {
 			mockRecords: map[string][]string{
 				"example.com": {"v=spf1 include:nonexistent.com -all"},
 			},
-			mockErr: errors.New("lookup nonexistent.com: no such host"), // Simulate error for include
-			expectedPass: false, // Error in include makes primary fail if -all is present
+			mockErr:        errors.New("lookup nonexistent.com: no such host"), // Simulate error for include
+			expectedResult: SPFPermError,
 		},
 		{
 			name:         "Max recursion depth reached for include",
@@ -411,21 +411,21 @@ func TestVerifySPF(t *testing.T) {
 				"sub10.example.com": {"v=spf1 include:sub11.example.com -all"}, // This will trigger max depth
 				"sub11.example.com": {"v=spf1 ip4:1.1.1.1 -all"},
 			},
-			expectedPass: false,
+			expectedResult: SPFPermError,
 		},
 		{
-			name:         "Invalid IP provided",
-			ip:           "invalid-ip",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:1.1.1.1 -all"}},
-			expectedPass: false,
+			name:           "Invalid IP provided",
+			ip:             "invalid-ip",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:1.1.1.1 -all"}},
+			expectedResult: SPFPermError,
 		},
 		{
-			name:         "Multiple SPF records, only one with v=spf1",
-			ip:           "192.168.1.1",
-			domain:       "example.com",
-			mockRecords:  map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all", "v=spf1 ip4:1.2.3.4 -all"}},
-			expectedPass: true,
+			name:           "Multiple SPF records",
+			ip:             "192.168.1.1",
+			domain:         "example.com",
+			mockRecords:    map[string][]string{"example.com": {"v=spf1 ip4:192.168.1.1 -all", "v=spf1 ip4:1.2.3.4 -all"}},
+			expectedResult: SPFPermError,
 		},
 	}
 
@@ -434,13 +434,13 @@ func TestVerifySPF(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, err := VerifySPF(tt.ip, tt.domain)
+			result, err := VerifySPF(tt.ip, tt.domain)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifySPF() unexpected error = %v", err)
 			}
-			if pass != tt.expectedPass {
-				t.Errorf("VerifySPF() got = %v, want %v", pass, tt.expectedPass)
+			if result != tt.expectedResult {
+				t.Errorf("VerifySPF() got = %v, want %v", result, tt.expectedResult)
 			}
 		})
 	}
@@ -450,7 +450,7 @@ func TestVerifyDMARC(t *testing.T) {
 	tests := []struct {
 		name           string
 		domain         string
-		spfPass        bool
+		spfResult      SPFResult
 		dkimPass       bool
 		mockRecords    map[string][]string
 		mockErr        error
@@ -458,40 +458,40 @@ func TestVerifyDMARC(t *testing.T) {
 		expectedPolicy string
 	}{
 		{
-			name:         "DMARC record with p=reject, SPF pass, DKIM fail",
-			domain:       "example.com",
-			spfPass:      true,
-			dkimPass:     false,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
-			expectedPass: true,
+			name:           "DMARC record with p=reject, SPF pass, DKIM fail",
+			domain:         "example.com",
+			spfResult:      SPFPass,
+			dkimPass:       false,
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
+			expectedPass:   true,
 			expectedPolicy: "reject",
 		},
 		{
-			name:         "DMARC record with p=reject, SPF fail, DKIM pass",
-			domain:       "example.com",
-			spfPass:      false,
-			dkimPass:     true,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
-			expectedPass: true,
+			name:           "DMARC record with p=reject, SPF fail, DKIM pass",
+			domain:         "example.com",
+			spfResult:      SPFFail,
+			dkimPass:       true,
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
+			expectedPass:   true,
 			expectedPolicy: "reject",
 		},
 		{
-			name:         "DMARC record with p=quarantine, SPF fail, DKIM fail",
-			domain:       "example.com",
-			spfPass:      false,
-			dkimPass:     false,
-			mockRecords:  map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
-			expectedPass: false,
+			name:           "DMARC record with p=quarantine, SPF fail, DKIM fail",
+			domain:         "example.com",
+			spfResult:      SPFFail,
+			dkimPass:       false,
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
+			expectedPass:   false,
 			expectedPolicy: "quarantine",
 		},
 		{
-			name:         "No DMARC record, SPF fail, DKIM pass",
-			domain:       "example.com",
-			spfPass:      false,
-			dkimPass:     true,
-			mockRecords:  nil, // Simulate no _dmarc TXT record
-			mockErr:      errors.New("host not found"),
-			expectedPass: true,
+			name:           "No DMARC record, SPF fail, DKIM pass",
+			domain:         "example.com",
+			spfResult:      SPFFail,
+			dkimPass:       true,
+			mockRecords:    nil, // Simulate no _dmarc TXT record
+			mockErr:        errors.New("host not found"),
+			expectedPass:   true,
 			expectedPolicy: "none",
 		},
 	}
@@ -501,7 +501,7 @@ func TestVerifyDMARC(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, policy, err := VerifyDMARC(tt.domain, tt.spfPass, tt.dkimPass)
+			pass, policy, err := VerifyDMARC(tt.domain, tt.spfResult, tt.dkimPass)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifyDMARC() unexpected error = %v", err)

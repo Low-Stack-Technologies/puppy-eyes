@@ -37,7 +37,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 	var authenticatedUserID pgtype.UUID
 	var envelopeFrom string
 	var envelopeTo []string
-	var spfPass bool
+	var spfResult dns.SPFResult
 
 	// 1. Greeting
 	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SERVER_IDENTITY)))
@@ -214,10 +214,16 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
 				var err error
-				spfPass, err = dns.VerifySPF(remoteIP, domainPart)
-				if err != nil || !spfPass {
-					log.Printf("SPF validation failed for domain %s from IP %s, reason: %s", domainPart, remoteIP, err)
+				spfResult, err = dns.VerifySPF(remoteIP, domainPart)
+				if err != nil || spfResult == dns.SPFFail || spfResult == dns.SPFPermError {
+					log.Printf("SPF validation failed for domain %s from IP %s, result: %s, error: %v", domainPart, remoteIP, spfResult, err)
 					conn.Write([]byte("550 5.7.1 Sender address rejected: SPF check failed\r\n"))
+					envelopeFrom = ""
+					continue
+				}
+				if spfResult == dns.SPFTempError {
+					log.Printf("SPF validation temporary failure for domain %s from IP %s, error: %v", domainPart, remoteIP, err)
+					conn.Write([]byte("451 4.7.1 Temporary failure, please try again later\r\n"))
 					envelopeFrom = ""
 					continue
 				}
@@ -314,24 +320,25 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				}
 				fromDomain := fromAddr[idx+1:]
 				dkimPass, _ := dns.VerifyDKIM(body.String())
-				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfPass, dkimPass)
+				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfResult, dkimPass)
 
 				// Reject if DMARC fails and policy is 'reject' or 'quarantine'
 				if !dmarcPass && (policy == "reject" || policy == "quarantine") {
 					conn.Write([]byte(fmt.Sprintf("550 5.7.1 DMARC policy violation (%s)\r\n", policy)))
 					envelopeFrom = ""
 					envelopeTo = nil
-					spfPass = false
+					spfResult = dns.SPFNeutral
 					continue
 				}
 
+				spfPass := (spfResult == dns.SPFPass)
 				err := ReceiveEmail(context.Background(), envelopeFrom, envelopeTo, body.String(), spfPass, dkimPass, dmarcPass)
 				if err != nil {
 					log.Printf("Failed to process incoming email: %v", err)
 					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
 					envelopeFrom = ""
 					envelopeTo = nil
-					spfPass = false
+					spfResult = dns.SPFNeutral
 					continue
 				}
 			} else if authenticatedUserID.Valid {
@@ -341,7 +348,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 					conn.Write([]byte(fmt.Sprintf("550 5.1.1 %v\r\n", err)))
 					envelopeFrom = ""
 					envelopeTo = nil
-					spfPass = false
+					spfResult = dns.SPFNeutral
 					continue
 				}
 			}
@@ -351,7 +358,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 			// Reset envelope for the next transaction on the same connection
 			envelopeFrom = ""
 			envelopeTo = nil
-			spfPass = false
+			spfResult = dns.SPFNeutral
 			conn.Write([]byte("250 2.0.0 OK: queued\r\n"))
 
 		case "QUIT":
