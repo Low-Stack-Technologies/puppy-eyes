@@ -17,6 +17,7 @@ import {
   type MessageDetail,
   type MessageSummary,
 } from "./lib/api";
+import { parseRawMail, type ParsedMail } from "./lib/mail-parser";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +29,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -58,7 +69,10 @@ import {
   Menu,
   ChevronDown,
   Circle,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff,
+  FolderInput
 } from "lucide-react";
 
 type Tab = "mail" | "settings";
@@ -188,6 +202,11 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
     [activeAddress, me.accessibleAddress],
   );
 
+  const parsedMessage = useMemo(() => {
+    if (!selectedMessage) return null;
+    return parseRawMail(selectedMessage.body);
+  }, [selectedMessage]);
+
   useEffect(() => {
     void loadMailboxes(activeAddress);
   }, [activeAddress]);
@@ -262,16 +281,39 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
 
   async function onDeleteSelected(): Promise<void> {
     if (!selectedMessage || !selectedMailbox) return;
-    await deleteMessage(selectedMessage.id, selectedMailbox);
-    setSelectedMessage(null);
+    await onDeleteMessage(selectedMessage.id);
+  }
+
+  async function onDeleteMessage(messageId: string): Promise<void> {
+    if (!selectedMailbox) return;
+    await deleteMessage(messageId, selectedMailbox);
+    if (selectedMessage?.id === messageId) setSelectedMessage(null);
     await loadMessages(selectedMailbox, true);
   }
 
-  async function onMoveSelected(toMailboxId: string): Promise<void> {
-    if (!selectedMessage || !selectedMailbox) return;
-    await moveMessage(selectedMessage.id, selectedMailbox, toMailboxId);
-    setSelectedMessage(null);
+  async function onMoveMessage(messageId: string, toMailboxId: string): Promise<void> {
+    if (!selectedMailbox) return;
+    await moveMessage(messageId, selectedMailbox, toMailboxId);
+    if (selectedMessage?.id === messageId) setSelectedMessage(null);
     await loadMessages(selectedMailbox, true);
+  }
+
+  async function onToggleRead(messageId: string, isRead: boolean): Promise<void> {
+    if (!selectedMailbox) return;
+    const add = isRead ? [] : ["\\Seen"];
+    const remove = isRead ? ["\\Seen"] : [];
+    await updateFlags(messageId, selectedMailbox, add, remove);
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, flags: mutateFlagsLocal(m.flags, add, remove) } : m));
+    if (selectedMessage?.id === messageId) {
+      setSelectedMessage(prev => prev ? { ...prev, flags: mutateFlagsLocal(prev.flags, add, remove) } : null);
+    }
+  }
+
+  function mutateFlagsLocal(current: string[], add: string[], remove: string[]): string[] {
+    const set = new Set(current);
+    add.forEach(f => set.add(f));
+    remove.forEach(f => set.delete(f));
+    return Array.from(set);
   }
 
   async function onSubmitCompose(form: {
@@ -433,6 +475,10 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
                           message={message}
                           selected={selectedMessage?.id === message.id}
                           onClick={() => openMessage(message.id)}
+                          onDelete={onDeleteMessage}
+                          onToggleRead={onToggleRead}
+                          onMove={onMoveMessage}
+                          mailboxes={mailboxes.filter(m => m.id !== selectedMailbox)}
                         />
                       ))
                     ) : (
@@ -468,23 +514,15 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
                           <Trash2 className="h-4 w-4 text-destructive/80" />
                         </Button>
                         <Separator orientation="vertical" className="mx-1 h-4" />
-                        <select
-                          className="h-8 rounded-md border border-input bg-background px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-primary/20"
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              void onMoveSelected(e.target.value);
-                              e.target.value = "";
-                            }
-                          }}
-                          defaultValue=""
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-9 w-9" 
+                          title={selectedMessage.flags.includes("\\Seen") ? "Mark as unread" : "Mark as read"} 
+                          onClick={() => onToggleRead(selectedMessage.id, selectedMessage.flags.includes("\\Seen"))}
                         >
-                          <option value="" disabled>Move to...</option>
-                          {mailboxes
-                            .filter((mb) => mb.id !== selectedMailbox)
-                            .map((mb) => (
-                              <option key={mb.id} value={mb.id}>{mb.name}</option>
-                            ))}
-                        </select>
+                          {selectedMessage.flags.includes("\\Seen") ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
                       </div>
                       <div className="flex items-center gap-2">
                          <Badge variant={selectedMessage.flags.includes("\\Seen") ? "outline" : "default"}>
@@ -497,7 +535,7 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
                       <div className="p-8 max-w-4xl mx-auto w-full">
                         <div className="mb-8 space-y-4">
                           <h1 className="text-3xl font-bold tracking-tight text-foreground">
-                            {extractHeader(selectedMessage.body, "Subject") || "(No Subject)"}
+                            {parsedMessage?.headers["subject"] || "(No Subject)"}
                           </h1>
                           
                           <div className="flex items-start justify-between gap-4">
@@ -522,10 +560,21 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
 
                         <Separator className="my-8" />
 
-                        <div className="prose prose-slate max-w-none">
-                          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-slate-800">
-                            {selectedMessage.body}
-                          </pre>
+                        <div className="max-w-none">
+                          {parsedMessage?.html ? (
+                            <div className="rounded-lg border bg-white overflow-hidden h-[600px]">
+                              <iframe
+                                srcDoc={parsedMessage.html}
+                                title="email-content"
+                                sandbox="allow-same-origin"
+                                className="w-full h-full border-none"
+                              />
+                            </div>
+                          ) : (
+                            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-slate-800">
+                              {parsedMessage?.text || selectedMessage.body}
+                            </pre>
+                          )}
                         </div>
                       </div>
                     </ScrollArea>
@@ -623,40 +672,92 @@ function MailboxIcon({ type, ...props }: { type: string } & React.SVGAttributes<
   }
 }
 
-function MessageListItem({ message, selected, onClick }: { message: MessageSummary; selected: boolean; onClick: () => void }) {
+function MessageListItem({ 
+  message, 
+  selected, 
+  onClick,
+  onDelete,
+  onToggleRead,
+  onMove,
+  mailboxes
+}: { 
+  message: MessageSummary; 
+  selected: boolean; 
+  onClick: () => void;
+  onDelete: (id: string) => void;
+  onToggleRead: (id: string, isRead: boolean) => void;
+  onMove: (id: string, toMailboxId: string) => void;
+  mailboxes: Mailbox[];
+}) {
   const isUnread = !message.flags.includes("\\Seen");
   
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "group relative flex w-full flex-col items-start gap-1 rounded-lg p-3 text-left transition-all",
-        selected 
-          ? "bg-primary/5 ring-1 ring-inset ring-primary/20" 
-          : "hover:bg-slate-100/80"
-      )}
-    >
-      <div className="flex w-full items-center justify-between gap-2">
-        <div className="flex items-center gap-2 overflow-hidden">
-          {isUnread && <div className="h-2 w-2 rounded-full bg-primary shrink-0" />}
-          <span className={cn("truncate text-sm", isUnread ? "font-bold text-foreground" : "font-medium text-muted-foreground")}>
-            {message.sender}
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          onClick={onClick}
+          className={cn(
+            "group relative flex w-full flex-col items-start gap-1 rounded-lg p-3 text-left transition-all outline-none",
+            selected 
+              ? "bg-primary/5 ring-1 ring-inset ring-primary/20" 
+              : "hover:bg-slate-100/80"
+          )}
+        >
+          <div className="flex w-full items-center justify-between gap-2">
+            <div className="flex items-center gap-2 overflow-hidden">
+              {isUnread && <div className="h-2 w-2 rounded-full bg-primary shrink-0" />}
+              <span className={cn("truncate text-sm", isUnread ? "font-bold text-foreground" : "font-medium text-muted-foreground")}>
+                {message.sender}
+              </span>
+            </div>
+            <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+              {new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+            </span>
+          </div>
+          
+          <span className={cn("w-full truncate text-sm", isUnread ? "font-semibold text-foreground" : "text-muted-foreground")}>
+            {message.subject || "(No Subject)"}
           </span>
-        </div>
-        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-          {new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-        </span>
-      </div>
-      
-      <span className={cn("w-full truncate text-sm", isUnread ? "font-semibold text-foreground" : "text-muted-foreground")}>
-        {message.subject || "(No Subject)"}
-      </span>
-      
-      <div className="flex items-center gap-2 mt-0.5">
-        {message.flags.includes("\\Starred") && <Star className="h-3 w-3 text-amber-400 fill-amber-400" />}
-        {message.flags.includes("\\Draft") && <Badge variant="outline" className="h-4 px-1 text-[8px] uppercase">Draft</Badge>}
-      </div>
-    </button>
+          
+          <div className="flex items-center gap-2 mt-0.5">
+            {message.flags.includes("\\Starred") && <Star className="h-3 w-3 text-amber-400 fill-amber-400" />}
+            {message.flags.includes("\\Draft") && <Badge variant="outline" className="h-4 px-1 text-[8px] uppercase">Draft</Badge>}
+          </div>
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onClick={() => onToggleRead(message.id, !isUnread)}>
+          {!isUnread ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
+          <span>Mark as {!isUnread ? "unread" : "read"}</span>
+        </ContextMenuItem>
+        
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <FolderInput className="mr-2 h-4 w-4" />
+            <span>Move to</span>
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-48">
+            {mailboxes.length > 0 ? (
+              mailboxes.map(mb => (
+                <ContextMenuItem key={mb.id} onClick={() => onMove(message.id, mb.id)}>
+                   <MailboxIcon type={mb.type} className="mr-2 h-4 w-4" />
+                   <span>{mb.name}</span>
+                </ContextMenuItem>
+              ))
+            ) : (
+              <ContextMenuItem disabled>No other mailboxes</ContextMenuItem>
+            )}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+
+        <ContextMenuSeparator />
+        
+        <ContextMenuItem onClick={() => onDelete(message.id)} className="text-destructive focus:text-destructive">
+          <Trash2 className="mr-2 h-4 w-4" />
+          <span>Delete</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
