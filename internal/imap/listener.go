@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -18,12 +19,14 @@ import (
 
 const IMAP_PORT = 143
 const IMAP_TLS_PORT = 993
+const defaultTLSCertPath = "certs/tls/server.crt"
+const defaultTLSKeyPath = "certs/tls/server.key"
 
 func handleIMAPConnection(conn net.Conn, isTLS bool) {
 	session := &imapSession{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		isTLS:  isTLS,
+		conn:    conn,
+		reader:  bufio.NewReader(conn),
+		isTLS:   isTLS,
 		updates: make(chan struct{}, 1), // Buffered channel for updates
 	}
 	defer session.conn.Close()
@@ -66,7 +69,7 @@ func handleIMAPConnection(conn net.Conn, isTLS bool) {
 
 			session.conn.Write([]byte(fmt.Sprintf("%s OK Begin TLS negotiation now\r\n", tag)))
 
-			cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+			cert, err := tls.LoadX509KeyPair(tlsCertPath(), tlsKeyPath())
 			if err != nil {
 				log.Printf("Failed to load key pair: %v", err)
 				return
@@ -404,7 +407,7 @@ func listenOnPort(wg *sync.WaitGroup, port int, isImplicitTLS bool) {
 
 		go func(c net.Conn) {
 			if isImplicitTLS {
-				cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+				cert, err := tls.LoadX509KeyPair(tlsCertPath(), tlsKeyPath())
 				if err != nil {
 					log.Printf("Failed to load key pair for implicit TLS: %v", err)
 					c.Close()
@@ -434,4 +437,18 @@ func StartListening(rwg *sync.WaitGroup) {
 	go listenOnPort(&wg, IMAP_PORT, false)
 	go listenOnPort(&wg, IMAP_TLS_PORT, true)
 	wg.Wait()
+}
+
+func tlsCertPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_CERT_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSCertPath
+}
+
+func tlsKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_KEY_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSKeyPath
 }

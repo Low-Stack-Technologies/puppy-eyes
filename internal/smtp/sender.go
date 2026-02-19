@@ -22,11 +22,17 @@ func SendEmail(ctx context.Context, userID pgtype.UUID, sender string, recipient
 		return fmt.Errorf("failed to find sender address: %w", err)
 	}
 
+	// DKIM sign outbound message before queuing
+	signedBody, err := SignDKIM(body, strings.SplitN(strings.Trim(sender, "<>"), "@", 2)[1])
+	if err != nil {
+		return fmt.Errorf("failed to DKIM sign outgoing email: %w", err)
+	}
+
 	// 2. Save the email to the database
 	emailID, err := db.Q.CreateEmail(ctx, db.CreateEmailParams{
 		Sender:     sender,
 		Recipients: recipients,
-		Body:       body,
+		Body:       signedBody,
 		SpfPass:    pgtype.Bool{Valid: false},
 		DmarcPass:  pgtype.Bool{Valid: false},
 		DkimPass:   pgtype.Bool{Valid: false},

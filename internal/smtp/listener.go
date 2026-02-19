@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/mail"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +34,8 @@ const SERVER_TO_SERVER_MTA_PORT = 25
 const CLIENT_TO_SERVER_MSA_PORT = 587
 const CLIENT_TO_SERVER_LEGACY_PORT = 465
 const SERVER_IDENTITY = "smtp.puppy-eyes.test"
+const defaultTLSCertPath = "certs/tls/server.crt"
+const defaultTLSKeyPath = "certs/tls/server.key"
 
 func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, isTLS bool) {
 	defer conn.Close()
@@ -86,7 +89,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 			}
 			conn.Write([]byte("220 Ready to start TLS\r\n"))
 
-			cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+			cert, err := tls.LoadX509KeyPair(tlsCertPath(), tlsKeyPath())
 			if err != nil {
 				log.Printf("Failed to load key pair: %v", err)
 				return
@@ -487,7 +490,7 @@ func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_T
 
 		go func(c net.Conn) {
 			if isImplicitTLS {
-				cert, err := tls.LoadX509KeyPair("certs/server.crt", "certs/server.key")
+				cert, err := tls.LoadX509KeyPair(tlsCertPath(), tlsKeyPath())
 				if err != nil {
 					log.Printf("Failed to load key pair for implicit TLS: %v", err)
 					c.Close()
@@ -518,4 +521,18 @@ func StartListening(rwg *sync.WaitGroup) {
 	go listenOnPort(&wg, CLIENT_TO_SERVER_MSA_PORT, CLIENT_TO_SERVER_MSA)
 	go listenOnPort(&wg, CLIENT_TO_SERVER_LEGACY_PORT, CLIENT_TO_SERVER_LEGACY)
 	wg.Wait()
+}
+
+func tlsCertPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_CERT_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSCertPath
+}
+
+func tlsKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("TLS_KEY_PATH")); value != "" {
+		return value
+	}
+	return defaultTLSKeyPath
 }

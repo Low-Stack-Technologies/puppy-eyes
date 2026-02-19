@@ -45,4 +45,4 @@
 
 ### DKIM
 - [x] **DKIM Signature Verification**: Implement the cryptographic verification of `DKIM-Signature` headers using public keys retrieved from DNS. This provides a second, robust method of sender authentication that is more resilient to mail forwarding than SPF.
-- [ ] **DKIM Signing**: Implement the ability to sign outgoing emails with a DKIM signature using a private key. This involves generating the `DKIM-Signature` header by hashing the message body and selected headers, ensuring that our sent mail is verifiable by receiving servers and improving deliverability.
+- [x] **DKIM Signing**: Implement the ability to sign outgoing emails with a DKIM signature using a private key. This involves generating the `DKIM-Signature` header by hashing the message body and selected headers, ensuring that our sent mail is verifiable by receiving servers and improving deliverability.
