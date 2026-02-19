@@ -601,14 +601,33 @@ func qualifierToResult(qualifier string) SPFResult {
 	}
 }
 
-// VerifyDMARC performs a basic DMARC check based on the SPF and DKIM results.
-func VerifyDMARC(domain string, spfResult SPFResult, dkimPass bool) (bool, string, error) {
-	log.Printf("[DMARC] Checking domain: %s (SPF Result: %v, DKIM Pass: %v)", domain, spfResult, dkimPass)
-	txts, err := LookupTXTFunc("_dmarc." + domain)
-	spfPass := (spfResult == SPFPass)
+// VerifyDMARC performs a DMARC check with strict alignment between header From and SPF/DKIM domains.
+func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string) (bool, string, error) {
+	headerFromDomain = normalizeDomain(headerFromDomain)
+	spfDomain = normalizeDomain(spfDomain)
+
+	log.Printf("[DMARC] Checking domain: %s (SPF Result: %v, SPF Domain: %s, DKIM Domains: %v)", headerFromDomain, spfResult, spfDomain, dkimDomains)
+
+	spfAligned := spfResult == SPFPass && domainsEqualStrict(headerFromDomain, spfDomain)
+	dkimAligned := false
+	for _, dkimDomain := range dkimDomains {
+		if domainsEqualStrict(headerFromDomain, dkimDomain) {
+			dkimAligned = true
+			break
+		}
+	}
+
+	dmarcPass := spfAligned || dkimAligned
+
+	if headerFromDomain == "" {
+		log.Printf("[DMARC] Empty header From domain; DMARC alignment fails.")
+		return dmarcPass, "none", nil
+	}
+
+	txts, err := LookupTXTFunc("_dmarc." + headerFromDomain)
 	if err != nil {
-		log.Printf("[DMARC] No record found for _dmarc.%s. Returning combined SPF/DKIM result.", domain)
-		return spfPass || dkimPass, "none", nil // No DMARC record found, return actual auth status
+		log.Printf("[DMARC] No record found for _dmarc.%s. Returning aligned auth result.", headerFromDomain)
+		return dmarcPass, "none", nil
 	}
 
 	policy := "none"
@@ -624,9 +643,8 @@ func VerifyDMARC(domain string, spfResult SPFResult, dkimPass bool) (bool, strin
 		}
 	}
 
-	log.Printf("[DMARC] Policy for %s is %s. SPF Pass: %v, DKIM Pass: %v", domain, policy, spfPass, dkimPass)
-	// DMARC passes if either SPF or DKIM passes (simplified: no alignment check yet)
-	return spfPass || dkimPass, policy, nil
+	log.Printf("[DMARC] Policy for %s is %s. SPF Aligned: %v, DKIM Aligned: %v", headerFromDomain, policy, spfAligned, dkimAligned)
+	return dmarcPass, policy, nil
 }
 
 // LookupMX returns the hostnames of the MX records for the given domain, sorted by preference.
@@ -645,19 +663,25 @@ func LookupMX(domain string) ([]string, error) {
 }
 
 // VerifyDKIM verifies the DKIM signatures of the provided email body.
-func VerifyDKIM(body string) (bool, error) {
+// Returns whether any signature passed and the list of passing d= domains.
+func VerifyDKIM(body string) (bool, []string, error) {
 	log.Printf("[DKIM] Starting verification")
 	reader := strings.NewReader(body)
 	verifications, err := dkim.Verify(reader)
 	if err != nil {
 		log.Printf("[DKIM] Verification failed to initialize: %v", err)
-		return false, err
+		return false, nil, err
 	}
 
+	passing := make(map[string]struct{})
 	for _, v := range verifications {
 		if v.Err == nil {
+			domain := normalizeDomain(v.Domain)
+			if domain != "" {
+				passing[domain] = struct{}{}
+			}
 			log.Printf("[DKIM] Signature verified for domain: %s", v.Domain)
-			return true, nil
+			continue
 		}
 		log.Printf("[DKIM] Signature failed for domain %s: %v", v.Domain, v.Err)
 	}
@@ -666,5 +690,19 @@ func VerifyDKIM(body string) (bool, error) {
 		log.Printf("[DKIM] No signatures found")
 	}
 
-	return false, nil
+	passingDomains := make([]string, 0, len(passing))
+	for domain := range passing {
+		passingDomains = append(passingDomains, domain)
+	}
+	return len(passingDomains) > 0, passingDomains, nil
+}
+
+func normalizeDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	domain = strings.TrimSuffix(domain, ".")
+	return strings.ToLower(domain)
+}
+
+func domainsEqualStrict(a, b string) bool {
+	return normalizeDomain(a) == normalizeDomain(b)
 }

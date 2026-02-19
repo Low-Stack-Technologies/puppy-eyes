@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/mail"
 	"strings"
 	"sync"
 	"time"
@@ -334,8 +335,16 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 					continue
 				}
 				fromDomain := fromAddr[idx+1:]
-				dkimPass, _ := dns.VerifyDKIM(body.String())
-				dmarcPass, policy, _ := dns.VerifyDMARC(fromDomain, spfResult, dkimPass)
+				headerFromDomain, headerFromOK := parseHeaderFromDomain(body.String())
+				dkimPass, dkimDomains, _ := dns.VerifyDKIM(body.String())
+				var dmarcPass bool
+				var policy string
+				if headerFromOK {
+					dmarcPass, policy, _ = dns.VerifyDMARC(headerFromDomain, spfResult, fromDomain, dkimDomains)
+				} else {
+					dmarcPass = false
+					policy = "none"
+				}
 
 				// Reject if DMARC fails and policy is 'reject' or 'quarantine'
 				if !dmarcPass && (policy == "reject" || policy == "quarantine") {
@@ -384,6 +393,42 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 			conn.Write([]byte("500 5.5.1 Unrecognized command\r\n"))
 		}
 	}
+}
+
+func parseHeaderFromDomain(raw string) (string, bool) {
+	msg, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		return "", false
+	}
+	from := strings.TrimSpace(msg.Header.Get("From"))
+	if from == "" {
+		return "", false
+	}
+	addrs, err := mail.ParseAddressList(from)
+	if err != nil || len(addrs) == 0 {
+		return "", false
+	}
+
+	domains := make(map[string]struct{})
+	for _, addr := range addrs {
+		at := strings.LastIndex(addr.Address, "@")
+		if at == -1 {
+			return "", false
+		}
+		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(addr.Address[at+1:]), "."))
+		if domain == "" {
+			return "", false
+		}
+		domains[domain] = struct{}{}
+		if len(domains) > 1 {
+			return "", false
+		}
+	}
+
+	for domain := range domains {
+		return domain, true
+	}
+	return "", false
 }
 
 func listenOnPort(wg *sync.WaitGroup, port int, connectionType SMTP_CONNECTION_TYPE) {

@@ -665,46 +665,72 @@ func TestExpandSPFMacrosExtended(t *testing.T) {
 func TestVerifyDMARC(t *testing.T) {
 	tests := []struct {
 		name           string
-		domain         string
+		headerFrom     string
 		spfResult      SPFResult
-		dkimPass       bool
+		spfDomain      string
+		dkimDomains    []string
 		mockRecords    map[string][]string
 		mockErr        error
 		expectedPass   bool
 		expectedPolicy string
 	}{
 		{
-			name:           "DMARC record with p=reject, SPF pass, DKIM fail",
-			domain:         "example.com",
+			name:           "DMARC record with p=reject, SPF aligned",
+			headerFrom:     "example.com",
 			spfResult:      SPFPass,
-			dkimPass:       false,
+			spfDomain:      "example.com",
+			dkimDomains:    nil,
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass:   true,
 			expectedPolicy: "reject",
 		},
 		{
-			name:           "DMARC record with p=reject, SPF fail, DKIM pass",
-			domain:         "example.com",
+			name:           "DMARC record with p=reject, SPF not aligned",
+			headerFrom:     "example.com",
+			spfResult:      SPFPass,
+			spfDomain:      "mailer.example.net",
+			dkimDomains:    nil,
+			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
+			expectedPass:   false,
+			expectedPolicy: "reject",
+		},
+		{
+			name:           "DMARC record with p=reject, DKIM aligned",
+			headerFrom:     "example.com",
 			spfResult:      SPFFail,
-			dkimPass:       true,
+			spfDomain:      "example.com",
+			dkimDomains:    []string{"example.com"},
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject; rua=mailto:a@example.com"}},
 			expectedPass:   true,
 			expectedPolicy: "reject",
 		},
 		{
-			name:           "DMARC record with p=quarantine, SPF fail, DKIM fail",
-			domain:         "example.com",
+			name:           "DMARC record with p=quarantine, DKIM not aligned",
+			headerFrom:     "example.com",
 			spfResult:      SPFFail,
-			dkimPass:       false,
+			spfDomain:      "example.com",
+			dkimDomains:    []string{"mailer.example.net"},
 			mockRecords:    map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=quarantine"}},
 			expectedPass:   false,
 			expectedPolicy: "quarantine",
 		},
 		{
-			name:           "No DMARC record, SPF fail, DKIM pass",
-			domain:         "example.com",
-			spfResult:      SPFFail,
-			dkimPass:       true,
+			name:           "No DMARC record, SPF not aligned",
+			headerFrom:     "example.com",
+			spfResult:      SPFPass,
+			spfDomain:      "mailer.example.net",
+			dkimDomains:    nil,
+			mockRecords:    nil, // Simulate no _dmarc TXT record
+			mockErr:        errors.New("host not found"),
+			expectedPass:   false,
+			expectedPolicy: "none",
+		},
+		{
+			name:           "No DMARC record, SPF aligned",
+			headerFrom:     "example.com",
+			spfResult:      SPFPass,
+			spfDomain:      "example.com",
+			dkimDomains:    nil,
 			mockRecords:    nil, // Simulate no _dmarc TXT record
 			mockErr:        errors.New("host not found"),
 			expectedPass:   true,
@@ -717,7 +743,7 @@ func TestVerifyDMARC(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, policy, err := VerifyDMARC(tt.domain, tt.spfResult, tt.dkimPass)
+			pass, policy, err := VerifyDMARC(tt.headerFrom, tt.spfResult, tt.spfDomain, tt.dkimDomains)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifyDMARC() unexpected error = %v", err)
