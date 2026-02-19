@@ -15,11 +15,12 @@ func main() {
 	db.Connect(ctx, connStr)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 
 	go smtp.StartWorker(ctx, &wg)
 	go smtp.StartListening(&wg)
 	go imap.StartListening(&wg)
+	go smtp.StartDMARCReporter(ctx, &wg)
 
 	wg.Wait()
 }

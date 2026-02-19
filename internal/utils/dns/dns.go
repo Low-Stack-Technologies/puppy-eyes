@@ -605,7 +605,7 @@ func qualifierToResult(qualifier string) SPFResult {
 }
 
 // VerifyDMARC performs a DMARC check with alignment between header From and SPF/DKIM domains.
-func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string, sampleKey string) (bool, string, error) {
+func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string, sampleKey string) (DMARCResult, error) {
 	headerFromDomain = normalizeDomain(headerFromDomain)
 	spfDomain = normalizeDomain(spfDomain)
 
@@ -613,15 +613,16 @@ func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string,
 
 	if headerFromDomain == "" {
 		log.Printf("[DMARC] Empty header From domain; DMARC alignment fails.")
-		return false, "none", nil
+		return DMARCResult{Pass: false, EnforcementPolicy: "none"}, nil
 	}
 
 	policy := dmarcPolicy{
-		p:     "none",
-		sp:    "",
-		adkim: "r",
-		aspf:  "r",
-		pct:   100,
+		P:     "none",
+		SP:    "",
+		ADKIM: "r",
+		ASPF:  "r",
+		PCT:   100,
+		RI:    86400,
 	}
 	orgDomain := ""
 	usedOrg := false
@@ -653,24 +654,38 @@ func VerifyDMARC(headerFromDomain string, spfResult SPFResult, spfDomain string,
 	if !found {
 		log.Printf("[DMARC] No record found for _dmarc.%s. Returning aligned auth result.", headerFromDomain)
 		spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
-		return spfAligned || dkimAligned, "none", nil
+		return DMARCResult{
+			Pass:              spfAligned || dkimAligned,
+			EnforcementPolicy: "none",
+			SPFAligned:        spfAligned,
+			DKIMAligned:       dkimAligned,
+			Policy:            policy,
+		}, nil
 	}
 
 	spfAligned, dkimAligned := dmarcAlignment(headerFromDomain, spfResult, spfDomain, dkimDomains, policy)
 	dmarcPass := spfAligned || dkimAligned
 
-	enforcementPolicy := policy.p
-	if usedOrg && isSubdomain(headerFromDomain, orgDomain) && policy.sp != "" {
-		enforcementPolicy = policy.sp
+	enforcementPolicy := policy.P
+	if usedOrg && isSubdomain(headerFromDomain, orgDomain) && policy.SP != "" {
+		enforcementPolicy = policy.SP
 	}
-	if !dmarcPass && policy.pct < 100 {
-		if !pctSelected(sampleKey, policy.pct) {
+	if !dmarcPass && policy.PCT < 100 {
+		if !pctSelected(sampleKey, policy.PCT) {
 			enforcementPolicy = "none"
 		}
 	}
 
-	log.Printf("[DMARC] Policy for %s is %s. SPF Aligned: %v, DKIM Aligned: %v, pct=%d", headerFromDomain, enforcementPolicy, spfAligned, dkimAligned, policy.pct)
-	return dmarcPass, enforcementPolicy, nil
+	log.Printf("[DMARC] Policy for %s is %s. SPF Aligned: %v, DKIM Aligned: %v, pct=%d", headerFromDomain, enforcementPolicy, spfAligned, dkimAligned, policy.PCT)
+	return DMARCResult{
+		Pass:              dmarcPass,
+		EnforcementPolicy: enforcementPolicy,
+		PolicyDomain:      effectivePolicyDomain(headerFromDomain, orgDomain, usedOrg),
+		UsedOrgFallback:   usedOrg,
+		SPFAligned:        spfAligned,
+		DKIMAligned:       dkimAligned,
+		Policy:            policy,
+	}, nil
 }
 
 // LookupMX returns the hostnames of the MX records for the given domain, sorted by preference.
@@ -734,19 +749,34 @@ func domainsEqualStrict(a, b string) bool {
 }
 
 type dmarcPolicy struct {
-	p     string
-	sp    string
-	adkim string
-	aspf  string
-	pct   int
+	P     string
+	SP    string
+	ADKIM string
+	ASPF  string
+	PCT   int
+	RUA   []string
+	RUF   []string
+	FO    string
+	RI    int
+}
+
+type DMARCResult struct {
+	Pass              bool
+	EnforcementPolicy string
+	PolicyDomain      string
+	UsedOrgFallback   bool
+	SPFAligned        bool
+	DKIMAligned       bool
+	Policy            dmarcPolicy
 }
 
 func parseDMARCRecord(txts []string) (dmarcPolicy, bool) {
 	policy := dmarcPolicy{
-		p:     "none",
-		adkim: "r",
-		aspf:  "r",
-		pct:   100,
+		P:     "none",
+		ADKIM: "r",
+		ASPF:  "r",
+		PCT:   100,
+		RI:    86400,
 	}
 	for _, txt := range txts {
 		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(txt)), "v=dmarc1") {
@@ -768,19 +798,19 @@ func parseDMARCRecord(txts []string) (dmarcPolicy, bool) {
 			switch key {
 			case "p":
 				if value == "none" || value == "quarantine" || value == "reject" {
-					policy.p = value
+					policy.P = value
 				}
 			case "sp":
 				if value == "none" || value == "quarantine" || value == "reject" {
-					policy.sp = value
+					policy.SP = value
 				}
 			case "adkim":
 				if value == "r" || value == "s" {
-					policy.adkim = value
+					policy.ADKIM = value
 				}
 			case "aspf":
 				if value == "r" || value == "s" {
-					policy.aspf = value
+					policy.ASPF = value
 				}
 			case "pct":
 				if pct, err := strconv.Atoi(value); err == nil {
@@ -789,7 +819,19 @@ func parseDMARCRecord(txts []string) (dmarcPolicy, bool) {
 					} else if pct > 100 {
 						pct = 100
 					}
-					policy.pct = pct
+					policy.PCT = pct
+				}
+			case "rua":
+				policy.RUA = parseReportURIs(value)
+			case "ruf":
+				policy.RUF = parseReportURIs(value)
+			case "fo":
+				policy.FO = value
+			case "ri":
+				if ri, err := strconv.Atoi(value); err == nil {
+					if ri > 0 {
+						policy.RI = ri
+					}
 				}
 			}
 		}
@@ -799,10 +841,10 @@ func parseDMARCRecord(txts []string) (dmarcPolicy, bool) {
 }
 
 func dmarcAlignment(headerFromDomain string, spfResult SPFResult, spfDomain string, dkimDomains []string, policy dmarcPolicy) (bool, bool) {
-	spfAligned := spfResult == SPFPass && domainsAlign(policy.aspf, headerFromDomain, spfDomain)
+	spfAligned := spfResult == SPFPass && domainsAlign(policy.ASPF, headerFromDomain, spfDomain)
 	dkimAligned := false
 	for _, dkimDomain := range dkimDomains {
-		if domainsAlign(policy.adkim, headerFromDomain, dkimDomain) {
+		if domainsAlign(policy.ADKIM, headerFromDomain, dkimDomain) {
 			dkimAligned = true
 			break
 		}
@@ -835,6 +877,43 @@ func pctSelected(sampleKey string, pct int) bool {
 	sum := sha256.Sum256([]byte(sampleKey))
 	val := binary.BigEndian.Uint32(sum[:4]) % 100
 	return int(val) < pct
+}
+
+func parseReportURIs(value string) []string {
+	uris := strings.Split(value, ",")
+	seen := make(map[string]struct{})
+	var out []string
+	for _, uri := range uris {
+		uri = strings.TrimSpace(uri)
+		if uri == "" {
+			continue
+		}
+		lower := strings.ToLower(uri)
+		if !strings.HasPrefix(lower, "mailto:") {
+			continue
+		}
+		addr := strings.TrimSpace(uri[len("mailto:"):])
+		if idx := strings.IndexAny(addr, "!?"); idx != -1 {
+			addr = addr[:idx]
+		}
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
+}
+
+func effectivePolicyDomain(headerFromDomain, orgDomain string, usedOrg bool) string {
+	if usedOrg && orgDomain != "" {
+		return orgDomain
+	}
+	return headerFromDomain
 }
 
 func organizationalDomain(domain string) (string, error) {

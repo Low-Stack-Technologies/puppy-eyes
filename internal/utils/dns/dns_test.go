@@ -860,17 +860,17 @@ func TestVerifyDMARC(t *testing.T) {
 			setupMockLookupTXT(t, tt.mockRecords, tt.mockErr)
 			defer teardownMockLookupTXT()
 
-			pass, policy, err := VerifyDMARC(tt.headerFrom, tt.spfResult, tt.spfDomain, tt.dkimDomains, tt.sampleKey)
+			result, err := VerifyDMARC(tt.headerFrom, tt.spfResult, tt.spfDomain, tt.dkimDomains, tt.sampleKey)
 
 			if err != nil && tt.mockErr == nil {
 				t.Errorf("VerifyDMARC() unexpected error = %v", err)
 			}
 
-			if pass != tt.expectedPass {
-				t.Errorf("VerifyDMARC() got pass = %v, want %v", pass, tt.expectedPass)
+			if result.Pass != tt.expectedPass {
+				t.Errorf("VerifyDMARC() got pass = %v, want %v", result.Pass, tt.expectedPass)
 			}
-			if policy != tt.expectedPolicy {
-				t.Errorf("VerifyDMARC() got policy = %v, want %v", policy, tt.expectedPolicy)
+			if result.EnforcementPolicy != tt.expectedPolicy {
+				t.Errorf("VerifyDMARC() got policy = %v, want %v", result.EnforcementPolicy, tt.expectedPolicy)
 			}
 		})
 	}

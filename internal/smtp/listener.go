@@ -42,6 +42,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 	var envelopeTo []string
 	var spfResult dns.SPFResult
 	var heloName string
+	var remoteIP string
 
 	// 1. Greeting
 	conn.Write([]byte(fmt.Sprintf("220 %s ESMTP Service Ready\r\n", SERVER_IDENTITY)))
@@ -224,7 +225,7 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 			// Perform SPF check for incoming server-to-server mail
 			if connectionType == SERVER_TO_SERVER_MTA {
 				domainPart := addr[idx+1:]
-				remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+				remoteIP, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
 
 				var err error
 				spfResult, err = dns.VerifySPF(remoteIP, domainPart, dns.SPFMacroContext{
@@ -341,9 +342,18 @@ func handleSMTPConnection(conn net.Conn, connectionType SMTP_CONNECTION_TYPE, is
 				dkimPass, dkimDomains, _ := dns.VerifyDKIM(body.String())
 				var dmarcPass bool
 				var policy string
+				var dmarcResult dns.DMARCResult
 				if headerFromOK {
 					sampleKey := buildDMARCSampleKey(messageID, headerFromDomain, fromDomain, dkimDomains)
-					dmarcPass, policy, _ = dns.VerifyDMARC(headerFromDomain, spfResult, fromDomain, dkimDomains, sampleKey)
+					dmarcResult, _ = dns.VerifyDMARC(headerFromDomain, spfResult, fromDomain, dkimDomains, sampleKey)
+					dmarcPass = dmarcResult.Pass
+					policy = dmarcResult.EnforcementPolicy
+					if dmarcResult.PolicyDomain != "" {
+						recordDMARCEvent(context.Background(), dmarcResult, headerFromDomain, fromDomain, remoteIP, spfResult, dkimDomains)
+						if !dmarcResult.Pass {
+							sendDMARCFailureReport(context.Background(), dmarcResult, headerFromDomain, fromDomain, remoteIP, spfResult, dkimDomains, body.String())
+						}
+					}
 				} else {
 					dmarcPass = false
 					policy = "none"
