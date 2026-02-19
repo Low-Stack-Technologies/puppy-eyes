@@ -2,5 +2,6 @@ tmp
 certs
 web/node_modules
 web/dist
+web/tsconfig.*.tsbuildinfo
 .env*
 !.env.example
