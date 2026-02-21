@@ -41,6 +41,36 @@ export type MessageDetail = {
   body: string;
 };
 
+export type SettingsUser = {
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  createdAt: string;
+};
+
+export type SettingsDomain = {
+  id: string;
+  name: string;
+  smtpDomain: string;
+  createdAt: string;
+};
+
+export type SettingsAddress = {
+  id: string;
+  name: string;
+  domainId: string;
+  domainName: string;
+  createdAt: string;
+};
+
+export type SettingsAccess = {
+  userId: string;
+  username: string;
+  addressId: string;
+  addressName: string;
+  domainName: string;
+};
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     credentials: "include",
@@ -135,4 +165,155 @@ export async function deleteMessage(messageId: string, mailboxId: string): Promi
 
 export async function listSettings(path: "users" | "domains" | "addresses" | "mailboxes" | "access"): Promise<{ items: unknown[] }> {
   return request(`/api/settings/${path}`);
+}
+
+function pickString(v: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = v[key];
+    if (typeof value === "string") return value;
+  }
+  return "";
+}
+
+function pickBool(v: Record<string, unknown>, ...keys: string[]): boolean {
+  for (const key of keys) {
+    const value = v[key];
+    if (typeof value === "boolean") return value;
+  }
+  return false;
+}
+
+function normalizeUser(v: unknown): SettingsUser {
+  const row = (v ?? {}) as Record<string, unknown>;
+  return {
+    id: pickString(row, "id", "ID"),
+    username: pickString(row, "username", "Username"),
+    isAdmin: pickBool(row, "isAdmin", "IsAdmin"),
+    createdAt: pickString(row, "createdAt", "CreatedAt"),
+  };
+}
+
+function normalizeDomain(v: unknown): SettingsDomain {
+  const row = (v ?? {}) as Record<string, unknown>;
+  return {
+    id: pickString(row, "id", "ID"),
+    name: pickString(row, "name", "Name"),
+    smtpDomain: pickString(row, "smtpDomain", "SmtpDomain"),
+    createdAt: pickString(row, "createdAt", "CreatedAt"),
+  };
+}
+
+function normalizeAddress(v: unknown): SettingsAddress {
+  const row = (v ?? {}) as Record<string, unknown>;
+  return {
+    id: pickString(row, "id", "ID"),
+    name: pickString(row, "name", "Name"),
+    domainId: pickString(row, "domainId", "DomainID", "domain", "Domain"),
+    domainName: pickString(row, "domainName", "DomainName"),
+    createdAt: pickString(row, "createdAt", "CreatedAt"),
+  };
+}
+
+function normalizeAccess(v: unknown): SettingsAccess {
+  const row = (v ?? {}) as Record<string, unknown>;
+  return {
+    userId: pickString(row, "userId", "UserID"),
+    username: pickString(row, "username", "Username"),
+    addressId: pickString(row, "addressId", "AddressID"),
+    addressName: pickString(row, "addressName", "AddressName"),
+    domainName: pickString(row, "domainName", "DomainName"),
+  };
+}
+
+export async function listUsers(): Promise<SettingsUser[]> {
+  const payload = await request<{ items: unknown[] }>("/api/settings/users");
+  return payload.items.map(normalizeUser);
+}
+
+export async function createUser(payload: { username: string; password: string; isAdmin: boolean }): Promise<void> {
+  await request("/api/settings/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateUser(id: string, payload: { username: string; password?: string; isAdmin: boolean }): Promise<void> {
+  await request(`/api/settings/users/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await request(`/api/settings/users/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listDomains(): Promise<SettingsDomain[]> {
+  const payload = await request<{ items: unknown[] }>("/api/settings/domains");
+  return payload.items.map(normalizeDomain);
+}
+
+export async function createDomain(payload: { name: string; smtpDomain: string }): Promise<void> {
+  await request("/api/settings/domains", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateDomain(id: string, payload: { name: string; smtpDomain: string }): Promise<void> {
+  await request(`/api/settings/domains/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteDomain(id: string): Promise<void> {
+  await request(`/api/settings/domains/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listAddresses(): Promise<SettingsAddress[]> {
+  const payload = await request<{ items: unknown[] }>("/api/settings/addresses");
+  return payload.items.map(normalizeAddress);
+}
+
+export async function createAddress(payload: { name: string; domainId: string }): Promise<void> {
+  await request("/api/settings/addresses", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateAddress(id: string, payload: { name: string; domainId: string }): Promise<void> {
+  await request(`/api/settings/addresses/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAddress(id: string): Promise<void> {
+  await request(`/api/settings/addresses/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listAccess(): Promise<SettingsAccess[]> {
+  const payload = await request<{ items: unknown[] }>("/api/settings/access");
+  return payload.items.map(normalizeAccess);
+}
+
+export async function createAccess(payload: { userId: string; addressId: string }): Promise<void> {
+  await request("/api/settings/access", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAccess(userId: string, addressId: string): Promise<void> {
+  await request(`/api/settings/access/${encodeURIComponent(userId)}/${encodeURIComponent(addressId)}`, {
+    method: "DELETE",
+  });
 }

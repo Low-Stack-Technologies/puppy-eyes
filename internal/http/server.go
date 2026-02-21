@@ -964,9 +964,25 @@ func (s *Server) handleSettingsAddressesRoot(w http.ResponseWriter, r *http.Requ
 			jsonError(w, http.StatusBadRequest, "invalid domain id")
 			return
 		}
-		created, err := db.Q.CreateAddress(r.Context(), db.CreateAddressParams{Name: req.Name, Domain: domainID})
+		tx, err := db.Pool.Begin(r.Context())
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to create address")
+			return
+		}
+		defer tx.Rollback(r.Context())
+		qtx := db.Q.WithTx(tx)
+
+		created, err := qtx.CreateAddress(r.Context(), db.CreateAddressParams{Name: req.Name, Domain: domainID})
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, "failed to create address")
+			return
+		}
+		if err := createDefaultMailboxesForAddress(r.Context(), qtx, created.ID); err != nil {
+			jsonError(w, http.StatusBadRequest, "failed to create address")
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to create address")
 			return
 		}
 		writeJSON(w, http.StatusCreated, created)
@@ -977,6 +993,10 @@ func (s *Server) handleSettingsAddressesRoot(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleSettingsAddressByID(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFromContext(r.Context())
+	if !p.IsAdmin && (r.Method == http.MethodPut || r.Method == http.MethodDelete) {
+		jsonError(w, http.StatusForbidden, "admin required")
+		return
+	}
 	id, err := parseUUID(strings.TrimPrefix(r.URL.Path, "/api/settings/addresses/"))
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid address id")
@@ -1159,6 +1179,10 @@ func (s *Server) handleSettingsAccessRoot(w http.ResponseWriter, r *http.Request
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": rows})
 	case http.MethodPost:
+		if !p.IsAdmin {
+			jsonError(w, http.StatusForbidden, "admin required")
+			return
+		}
 		var req struct {
 			UserID    string `json:"userId"`
 			AddressID string `json:"addressId"`
@@ -1177,12 +1201,6 @@ func (s *Server) handleSettingsAccessRoot(w http.ResponseWriter, r *http.Request
 			jsonError(w, http.StatusBadRequest, "invalid address id")
 			return
 		}
-		if !p.IsAdmin {
-			if err := s.ensureAddressAccess(r.Context(), p.UserID, addressID); err != nil {
-				jsonError(w, http.StatusForbidden, "address not accessible")
-				return
-			}
-		}
 		if err := db.Q.CreateUserAddressAccess(r.Context(), db.CreateUserAddressAccessParams{UserID: userID, AddressID: addressID}); err != nil {
 			jsonError(w, http.StatusBadRequest, "failed to create access")
 			return
@@ -1199,6 +1217,10 @@ func (s *Server) handleSettingsAccessByID(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p, _ := principalFromContext(r.Context())
+	if !p.IsAdmin {
+		jsonError(w, http.StatusForbidden, "admin required")
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/settings/access/"), "/")
 	if len(parts) != 2 {
 		jsonError(w, http.StatusBadRequest, "expected /api/settings/access/{userId}/{addressId}")
@@ -1213,12 +1235,6 @@ func (s *Server) handleSettingsAccessByID(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid address id")
 		return
-	}
-	if !p.IsAdmin {
-		if err := s.ensureAddressAccess(r.Context(), p.UserID, addressID); err != nil {
-			jsonError(w, http.StatusForbidden, "address not accessible")
-			return
-		}
 	}
 	if err := db.Q.DeleteUserAddressAccess(r.Context(), db.DeleteUserAddressAccessParams{UserID: userID, AddressID: addressID}); err != nil {
 		jsonError(w, http.StatusBadRequest, "failed to delete access")
@@ -1502,6 +1518,28 @@ func parseMailboxType(value string) (db.NullMailboxType, error) {
 		return db.NullMailboxType{}, fmt.Errorf("invalid mailbox type")
 	}
 	return db.NullMailboxType{MailboxType: v, Valid: true}, nil
+}
+
+func createDefaultMailboxesForAddress(ctx context.Context, q *db.Queries, addressID pgtype.UUID) error {
+	defaultMailboxes := []db.MailboxType{
+		db.MailboxTypeINBOX,
+		db.MailboxTypeDRAFTS,
+		db.MailboxTypeSENT,
+		db.MailboxTypeTRASH,
+		db.MailboxTypeSPAM,
+		db.MailboxTypeARCHIVE,
+	}
+	for _, mailboxType := range defaultMailboxes {
+		if _, err := q.CreateMailboxFull(ctx, db.CreateMailboxFullParams{
+			Name:      string(mailboxType),
+			Type:      db.NullMailboxType{MailboxType: mailboxType, Valid: true},
+			ParentID:  pgtype.UUID{},
+			AddressID: addressID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mergeRecipients(parts ...[]string) []string {

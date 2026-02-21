@@ -1,23 +1,42 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   authMe,
+  createAccess,
+  createAddress,
+  createDomain,
+  createUser,
+  deleteAccess,
+  deleteAddress,
+  deleteDomain,
+  deleteUser,
   deleteMessage,
   getMessage,
+  listAccess,
+  listAddresses,
+  listDomains,
   listMailboxes,
   listMessages,
   listSettings,
+  listUsers,
   login,
   logout,
   moveMessage,
   sendMessage,
   setActiveAddress,
+  updateAddress,
+  updateDomain,
   updateFlags,
+  updateUser,
   type AuthMe,
   type Mailbox,
   type MessageDetail,
   type MessageSummary,
+  type SettingsAccess,
+  type SettingsAddress,
+  type SettingsDomain,
+  type SettingsUser,
 } from "./lib/api";
-import { parseRawMail, type ParsedMail } from "./lib/mail-parser";
+import { parseRawMail } from "./lib/mail-parser";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,14 +67,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   Archive,
-  CheckCircle2,
-  ChevronRight,
   Clock,
-  ExternalLink,
   Inbox,
   LogOut,
   Mail,
-  MoreVertical,
   Plus,
   RefreshCw,
   Search,
@@ -65,7 +80,6 @@ import {
   Star,
   Trash2,
   User,
-  X,
   Menu,
   ChevronDown,
   Circle,
@@ -118,7 +132,6 @@ function LoginForm({ onLogin }: { onLogin: () => Promise<void> }): JSX.Element {
         <Card className="border-none shadow-xl ring-1 ring-slate-200">
           <CardHeader className="space-y-1 pb-4">
             <CardTitle className="text-xl">Sign in</CardTitle>
-            <CardDescription>Enter your credentials to access your account</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={submit} className="space-y-4">
@@ -129,7 +142,7 @@ function LoginForm({ onLogin }: { onLogin: () => Promise<void> }): JSX.Element {
                   <Input
                     id="username"
                     className="pl-10"
-                    placeholder="name@example.com"
+                    placeholder="username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     required
@@ -191,16 +204,9 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
   const [hasMore, setHasMore] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<MessageDetail | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("users");
-  const [settingsRows, setSettingsRows] = useState<unknown[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const wsRef = useRef<WebSocket | null>(null);
-
-  const activeAddressLabel = useMemo(
-    () => me.accessibleAddress.find((address) => address.id === activeAddress)?.email ?? "",
-    [activeAddress, me.accessibleAddress],
-  );
 
   const parsedMessage = useMemo(() => {
     if (!selectedMessage) return null;
@@ -222,9 +228,8 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
   }, [selectedMailbox]);
 
   useEffect(() => {
-    if (tab !== "settings") return;
-    void loadSettings(settingsTab);
-  }, [tab, settingsTab]);
+    setActiveAddressState(me.activeAddressId);
+  }, [me.activeAddressId]);
 
   async function loadMailboxes(addressId: string): Promise<void> {
     const rows = await listMailboxes(addressId);
@@ -245,11 +250,6 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
     setMessages((prev) => (reset ? payload.items : [...prev, ...payload.items]));
     setNextCursor(payload.nextCursor);
     setHasMore(payload.hasMore);
-  }
-
-  async function loadSettings(next: SettingsTab): Promise<void> {
-    const payload = await listSettings(next);
-    setSettingsRows(payload.items);
   }
 
   function connectMailboxWS(mailboxId: string): void {
@@ -604,33 +604,8 @@ function AppShell({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<vo
               </div>
               
               <ScrollArea className="flex-1 p-6">
-                <div className="max-w-5xl mx-auto">
-                  <Tabs value={settingsTab} onValueChange={(value) => setSettingsTab(value as SettingsTab)}>
-                    <TabsList className="grid w-full grid-cols-5 mb-8 bg-muted/50 p-1">
-                      <TabsTrigger value="users" className="data-[state=active]:shadow-sm">Users</TabsTrigger>
-                      <TabsTrigger value="domains" className="data-[state=active]:shadow-sm">Domains</TabsTrigger>
-                      <TabsTrigger value="addresses" className="data-[state=active]:shadow-sm">Addresses</TabsTrigger>
-                      <TabsTrigger value="mailboxes" className="data-[state=active]:shadow-sm">Mailboxes</TabsTrigger>
-                      <TabsTrigger value="access" className="data-[state=active]:shadow-sm">Access</TabsTrigger>
-                    </TabsList>
-
-                    {settingsTabs.map((name) => (
-                      <TabsContent key={name} value={name} className="mt-0">
-                        <div className="grid gap-6">
-                          {settingsRows.length > 0 ? (
-                            settingsRows.map((row, idx) => (
-                              <SettingsCard key={`${name}-${idx}`} row={row} type={name} />
-                            ))
-                          ) : (
-                            <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-xl bg-slate-50/50">
-                              <Settings className="h-10 w-10 text-slate-200 mb-3" />
-                              <p className="text-sm font-medium text-slate-500">No {name} found</p>
-                            </div>
-                          )}
-                        </div>
-                      </TabsContent>
-                    ))}
-                  </Tabs>
+                <div className="max-w-6xl mx-auto">
+                  <SettingsPanel me={me} onReloadMe={onReloadMe} />
                 </div>
               </ScrollArea>
             </div>
@@ -761,29 +736,487 @@ function MessageListItem({
   );
 }
 
-function SettingsCard({ row, type }: { row: any, type: string }) {
-  const entries = Object.entries(row);
+function SettingsPanel({ me, onReloadMe }: { me: AuthMe; onReloadMe: () => Promise<void> }): JSX.Element {
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(me.isAdmin ? "users" : "addresses");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const [users, setUsers] = useState<SettingsUser[]>([]);
+  const [domains, setDomains] = useState<SettingsDomain[]>([]);
+  const [addresses, setAddresses] = useState<SettingsAddress[]>([]);
+  const [access, setAccess] = useState<SettingsAccess[]>([]);
+  const [mailboxRows, setMailboxRows] = useState<Record<string, unknown>[]>([]);
+
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<SettingsUser | null>(null);
+  const [userForm, setUserForm] = useState({ username: "", password: "", isAdmin: false });
+
+  const [domainModalOpen, setDomainModalOpen] = useState(false);
+  const [editingDomain, setEditingDomain] = useState<SettingsDomain | null>(null);
+  const [domainForm, setDomainForm] = useState({ name: "", smtpDomain: "" });
+
+  const [addressModalOpen, setAddressModalOpen] = useState(false);
+  const [editingAddress, setEditingAddress] = useState<SettingsAddress | null>(null);
+  const [addressForm, setAddressForm] = useState({ name: "", domainId: "" });
+
+  const [accessModalOpen, setAccessModalOpen] = useState(false);
+  const [accessForm, setAccessForm] = useState({ userId: "", addressId: "" });
+
+  const visibleTabs: SettingsTab[] = me.isAdmin ? settingsTabs : ["addresses", "mailboxes", "access"];
+
+  useEffect(() => {
+    if (!visibleTabs.includes(settingsTab)) {
+      setSettingsTab(visibleTabs[0]);
+    }
+  }, [settingsTab, visibleTabs]);
+
+  useEffect(() => {
+    void loadCurrentTab(settingsTab);
+  }, [settingsTab]);
+
+  async function loadCurrentTab(tab: SettingsTab): Promise<void> {
+    setError("");
+    setLoading(true);
+    try {
+      if (tab === "users") {
+        setUsers(await listUsers());
+      } else if (tab === "domains") {
+        setDomains(await listDomains());
+      } else if (tab === "addresses") {
+        const rows = await listAddresses();
+        setAddresses(rows);
+        if (me.isAdmin) {
+          setDomains(await listDomains());
+        }
+      } else if (tab === "access") {
+        setAccess(await listAccess());
+        if (me.isAdmin) {
+          const [userRows, addressRows] = await Promise.all([listUsers(), listAddresses()]);
+          setUsers(userRows);
+          setAddresses(addressRows);
+        }
+      } else {
+        const payload = await listSettings("mailboxes");
+        setMailboxRows(payload.items.map((item) => asRecord(item)));
+      }
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshAndMaybeMe(reloadMe: boolean): Promise<void> {
+    await loadCurrentTab(settingsTab);
+    if (reloadMe) {
+      await onReloadMe();
+    }
+  }
+
+  function openCreateUser(): void {
+    setEditingUser(null);
+    setUserForm({ username: "", password: "", isAdmin: false });
+    setUserModalOpen(true);
+  }
+
+  function openEditUser(user: SettingsUser): void {
+    setEditingUser(user);
+    setUserForm({ username: user.username, password: "", isAdmin: user.isAdmin });
+    setUserModalOpen(true);
+  }
+
+  async function submitUser(): Promise<void> {
+    if (!userForm.username.trim()) {
+      setError("Username is required");
+      return;
+    }
+    if (!editingUser && !userForm.password.trim()) {
+      setError("Password is required when creating a user");
+      return;
+    }
+    setError("");
+    if (editingUser) {
+      await updateUser(editingUser.id, {
+        username: userForm.username.trim(),
+        isAdmin: userForm.isAdmin,
+        password: userForm.password.trim() || undefined,
+      });
+    } else {
+      await createUser({
+        username: userForm.username.trim(),
+        password: userForm.password,
+        isAdmin: userForm.isAdmin,
+      });
+    }
+    setUserModalOpen(false);
+    await refreshAndMaybeMe(false);
+  }
+
+  async function removeUser(id: string): Promise<void> {
+    if (!window.confirm("Delete this user?")) return;
+    await deleteUser(id);
+    await refreshAndMaybeMe(false);
+  }
+
+  function openCreateDomain(): void {
+    setEditingDomain(null);
+    setDomainForm({ name: "", smtpDomain: "" });
+    setDomainModalOpen(true);
+  }
+
+  function openEditDomain(domain: SettingsDomain): void {
+    setEditingDomain(domain);
+    setDomainForm({ name: domain.name, smtpDomain: domain.smtpDomain });
+    setDomainModalOpen(true);
+  }
+
+  async function submitDomain(): Promise<void> {
+    if (!domainForm.name.trim() || !domainForm.smtpDomain.trim()) {
+      setError("Domain name and SMTP domain are required");
+      return;
+    }
+    setError("");
+    if (editingDomain) {
+      await updateDomain(editingDomain.id, { name: domainForm.name.trim(), smtpDomain: domainForm.smtpDomain.trim() });
+    } else {
+      await createDomain({ name: domainForm.name.trim(), smtpDomain: domainForm.smtpDomain.trim() });
+    }
+    setDomainModalOpen(false);
+    await refreshAndMaybeMe(false);
+  }
+
+  async function removeDomain(id: string): Promise<void> {
+    if (!window.confirm("Delete this domain and all linked data?")) return;
+    await deleteDomain(id);
+    await refreshAndMaybeMe(true);
+  }
+
+  function openCreateAddress(): void {
+    setEditingAddress(null);
+    setAddressForm({ name: "", domainId: domains[0]?.id ?? "" });
+    setAddressModalOpen(true);
+  }
+
+  function openEditAddress(address: SettingsAddress): void {
+    setEditingAddress(address);
+    setAddressForm({ name: address.name, domainId: address.domainId });
+    setAddressModalOpen(true);
+  }
+
+  async function submitAddress(): Promise<void> {
+    if (!addressForm.name.trim() || !addressForm.domainId) {
+      setError("Address name and domain are required");
+      return;
+    }
+    setError("");
+    if (editingAddress) {
+      await updateAddress(editingAddress.id, { name: addressForm.name.trim(), domainId: addressForm.domainId });
+    } else {
+      await createAddress({ name: addressForm.name.trim(), domainId: addressForm.domainId });
+    }
+    setAddressModalOpen(false);
+    await refreshAndMaybeMe(true);
+  }
+
+  async function removeAddress(id: string): Promise<void> {
+    if (!window.confirm("Delete this address and all linked mailboxes/messages?")) return;
+    await deleteAddress(id);
+    await refreshAndMaybeMe(true);
+  }
+
+  function openCreateAccess(): void {
+    setAccessForm({ userId: users[0]?.id ?? "", addressId: addresses[0]?.id ?? "" });
+    setAccessModalOpen(true);
+  }
+
+  async function submitAccess(): Promise<void> {
+    if (!accessForm.userId || !accessForm.addressId) {
+      setError("User and address are required");
+      return;
+    }
+    setError("");
+    await createAccess(accessForm);
+    setAccessModalOpen(false);
+    await refreshAndMaybeMe(true);
+  }
+
+  async function removeAccess(userId: string, addressId: string): Promise<void> {
+    if (!window.confirm("Remove this access mapping?")) return;
+    await deleteAccess(userId, addressId);
+    await refreshAndMaybeMe(true);
+  }
+
   return (
-    <Card className="border-none shadow-sm ring-1 ring-slate-200 overflow-hidden">
-      <div className="bg-slate-50/50 border-b px-4 py-2 flex items-center justify-between">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{type} Details</span>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-6 w-6"><ExternalLink className="h-3 w-3" /></Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6"><MoreVertical className="h-3 w-3" /></Button>
+    <>
+      <Tabs value={settingsTab} onValueChange={(value) => setSettingsTab(value as SettingsTab)}>
+        <TabsList className="grid w-full mb-8 bg-muted/50 p-1" style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, minmax(0, 1fr))` }}>
+          {visibleTabs.map((name) => (
+            <TabsTrigger key={name} value={name} className="data-[state=active]:shadow-sm capitalize">
+              {name}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        <div className="mb-4 flex items-center justify-between">
+          <div className="text-sm text-muted-foreground">{loading ? "Loading..." : ""}</div>
+          {me.isAdmin && settingsTab !== "mailboxes" && (
+            <Button size="sm" onClick={() => {
+              if (settingsTab === "users") openCreateUser();
+              if (settingsTab === "domains") openCreateDomain();
+              if (settingsTab === "addresses") openCreateAddress();
+              if (settingsTab === "access") openCreateAccess();
+            }}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add
+            </Button>
+          )}
         </div>
-      </div>
-      <CardContent className="p-4 grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-        {entries.map(([key, value]) => (
-          <div key={key} className="space-y-1">
-            <Label className="text-[10px] font-bold uppercase text-slate-400 tracking-tight">{prettyLabel(key)}</Label>
-            <div className="text-sm font-medium text-slate-700 truncate bg-slate-100/50 px-2 py-1 rounded">
-              {toDisplayValue(value)}
-            </div>
+
+        {error && (
+          <div className="mb-4 rounded-md border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
+            {error}
           </div>
-        ))}
-      </CardContent>
-    </Card>
+        )}
+
+        <TabsContent value="users" className="mt-0">
+          <SettingsTable
+            emptyLabel="No users found"
+            headers={["Username", "Role", "Created", "Actions"]}
+            rows={users.map((user) => [
+              user.username,
+              user.isAdmin ? "Admin" : "User",
+              formatDate(user.createdAt),
+              me.isAdmin ? (
+                <div className="flex gap-2" key={user.id}>
+                  <Button variant="outline" size="sm" onClick={() => openEditUser(user)}>Edit</Button>
+                  <Button variant="destructive" size="sm" onClick={() => void removeUser(user.id)}>Delete</Button>
+                </div>
+              ) : (
+                ""
+              ),
+            ])}
+          />
+        </TabsContent>
+
+        <TabsContent value="domains" className="mt-0">
+          <SettingsTable
+            emptyLabel="No domains found"
+            headers={["Name", "SMTP Domain", "Created", "Actions"]}
+            rows={domains.map((domain) => [
+              domain.name,
+              domain.smtpDomain,
+              formatDate(domain.createdAt),
+              me.isAdmin ? (
+                <div className="flex gap-2" key={domain.id}>
+                  <Button variant="outline" size="sm" onClick={() => openEditDomain(domain)}>Edit</Button>
+                  <Button variant="destructive" size="sm" onClick={() => void removeDomain(domain.id)}>Delete</Button>
+                </div>
+              ) : (
+                ""
+              ),
+            ])}
+          />
+        </TabsContent>
+
+        <TabsContent value="addresses" className="mt-0">
+          <SettingsTable
+            emptyLabel="No addresses found"
+            headers={["Address", "Domain", "Created", "Actions"]}
+            rows={addresses.map((address) => [
+              `${address.name}@${address.domainName}`,
+              address.domainName,
+              formatDate(address.createdAt),
+              me.isAdmin ? (
+                <div className="flex gap-2" key={address.id}>
+                  <Button variant="outline" size="sm" onClick={() => openEditAddress(address)}>Edit</Button>
+                  <Button variant="destructive" size="sm" onClick={() => void removeAddress(address.id)}>Delete</Button>
+                </div>
+              ) : (
+                ""
+              ),
+            ])}
+          />
+        </TabsContent>
+
+        <TabsContent value="access" className="mt-0">
+          <SettingsTable
+            emptyLabel="No access mappings found"
+            headers={["User", "Address", "Domain", "Actions"]}
+            rows={access.map((row) => [
+              row.username,
+              row.addressName,
+              row.domainName,
+              me.isAdmin ? (
+                <Button variant="destructive" size="sm" key={`${row.userId}-${row.addressId}`} onClick={() => void removeAccess(row.userId, row.addressId)}>
+                  Revoke
+                </Button>
+              ) : (
+                ""
+              ),
+            ])}
+          />
+        </TabsContent>
+
+        <TabsContent value="mailboxes" className="mt-0">
+          <SettingsTable
+            emptyLabel="No mailboxes found"
+            headers={["Name", "Type", "Address", "Domain"]}
+            rows={mailboxRows.map((row) => [
+              field(row, "name", "Name"),
+              field(row, "type", "Type"),
+              field(row, "addressName", "AddressName"),
+              field(row, "domainName", "DomainName"),
+            ])}
+          />
+        </TabsContent>
+      </Tabs>
+
+      <Dialog open={userModalOpen} onOpenChange={setUserModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingUser ? "Edit user" : "Create user"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input placeholder="Username" value={userForm.username} onChange={(e) => setUserForm((prev) => ({ ...prev, username: e.target.value }))} />
+            <Input type="password" placeholder={editingUser ? "New password (optional)" : "Password"} value={userForm.password} onChange={(e) => setUserForm((prev) => ({ ...prev, password: e.target.value }))} />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={userForm.isAdmin} onChange={(e) => setUserForm((prev) => ({ ...prev, isAdmin: e.target.checked }))} />
+              Administrator
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUserModalOpen(false)}>Cancel</Button>
+            <Button onClick={() => void submitUser()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={domainModalOpen} onOpenChange={setDomainModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingDomain ? "Edit domain" : "Create domain"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input placeholder="Domain (for addresses)" value={domainForm.name} onChange={(e) => setDomainForm((prev) => ({ ...prev, name: e.target.value }))} />
+            <Input placeholder="SMTP host/domain" value={domainForm.smtpDomain} onChange={(e) => setDomainForm((prev) => ({ ...prev, smtpDomain: e.target.value }))} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDomainModalOpen(false)}>Cancel</Button>
+            <Button onClick={() => void submitDomain()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addressModalOpen} onOpenChange={setAddressModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingAddress ? "Edit address" : "Create address"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input placeholder="Mailbox name/local-part" value={addressForm.name} onChange={(e) => setAddressForm((prev) => ({ ...prev, name: e.target.value }))} />
+            <select
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={addressForm.domainId}
+              onChange={(e) => setAddressForm((prev) => ({ ...prev, domainId: e.target.value }))}
+            >
+              {domains.map((domain) => (
+                <option key={domain.id} value={domain.id}>{domain.name}</option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddressModalOpen(false)}>Cancel</Button>
+            <Button onClick={() => void submitAddress()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={accessModalOpen} onOpenChange={setAccessModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Grant access</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <select
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={accessForm.userId}
+              onChange={(e) => setAccessForm((prev) => ({ ...prev, userId: e.target.value }))}
+            >
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>{user.username}</option>
+              ))}
+            </select>
+            <select
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={accessForm.addressId}
+              onChange={(e) => setAccessForm((prev) => ({ ...prev, addressId: e.target.value }))}
+            >
+              {addresses.map((address) => (
+                <option key={address.id} value={address.id}>{address.name}@{address.domainName}</option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAccessModalOpen(false)}>Cancel</Button>
+            <Button onClick={() => void submitAccess()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
+}
+
+function SettingsTable({ headers, rows, emptyLabel }: { headers: string[]; rows: (string | JSX.Element)[][]; emptyLabel: string }): JSX.Element {
+  if (rows.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-xl bg-slate-50/50">
+        <Settings className="h-10 w-10 text-slate-200 mb-3" />
+        <p className="text-sm font-medium text-slate-500">{emptyLabel}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border bg-white">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            {headers.map((header) => (
+              <th key={header} className="px-4 py-2 text-left font-semibold text-slate-600">{header}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={idx} className="border-t">
+              {row.map((cell, cellIdx) => (
+                <td key={cellIdx} className="px-4 py-2 align-middle">{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  return value as Record<string, unknown>;
+}
+
+function field(row: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return "";
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return "Request failed";
 }
 
 function ComposeDialog({
@@ -922,33 +1355,10 @@ function splitEmails(value: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-function extractHeader(raw: string, header: string): string {
-  const lines = raw.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed === "") break;
-    if (trimmed.toLowerCase().startsWith(`${header.toLowerCase()}:`)) {
-      return trimmed.slice(header.length + 1).trim();
-    }
-  }
-  return "";
-}
-
 function formatDate(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString([], { dateStyle: 'long', timeStyle: 'short' });
-}
-
-function toDisplayValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) return value.map((item) => String(item)).join(", ");
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-function prettyLabel(key: string): string {
-  return key.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ").trim();
 }
 
 export default function App(): JSX.Element {
@@ -989,4 +1399,3 @@ export default function App(): JSX.Element {
 
   return <AppShell me={me} onReloadMe={load} />;
 }
-
